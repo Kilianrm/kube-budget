@@ -10,8 +10,8 @@ import (
 )
 
 func main() {
-	// Derive pricing configuration for an AWS EC2 instance type (e.g., m6i.large).
-	cfg, err := aws.NewPriceConfig("m6i.large")
+	// Derive a resource-price configuration for an AWS worker-node type and region.
+	cfg, err := aws.NewPriceConfigForRegion("m6i.large", "us-east-1")
 	if err != nil {
 		log.Fatal(err)
 	}

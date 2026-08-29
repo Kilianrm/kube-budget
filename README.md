@@ -90,6 +90,41 @@ Early MVP in active development.
 
 The project is focused on building a useful Kubernetes cost-estimation tool that can evolve into a stronger platform-facing solution.
 
+## CLI
+
+Install the Linux command from the repository root:
+
+```sh
+go install ./cmd/kubeestimate
+```
+
+Add Go's binary directory to your Bash `PATH`, then restart the shell (or run `source ~/.bashrc`):
+
+```sh
+echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Then estimate a Deployment manifest:
+
+```sh
+kubeestimate deployment.yaml --provider aws --region eu-west-1
+```
+
+For a quick estimate, provide only the manifest. The CLI uses AWS, `us-east-1`, and `m6i.large` on-demand pricing, and prints an advisory for each assumed value:
+
+```sh
+kubeestimate deployment.yaml
+```
+
+Use `--instance-type` when the cluster uses a different worker-node type; it defaults to `m6i.large`:
+
+```sh
+kubeestimate deployment.yaml --provider aws --region eu-west-1 --instance-type c6i.large
+```
+
+The CLI reads CPU, memory, and ephemeral-storage requests from the manifest. It currently supports Deployment manifests and illustrative AWS pricing snapshots for `us-east-1` and `eu-west-1`. The node type is used to derive the cost attributed to those requested resources. Output includes hourly and daily USD estimates; the daily total is the hourly total multiplied by 24. AWS region identifiers use hyphens, so use `eu-west-1` rather than `eu-west1`.
+
 
 ## Roadmap
 
@@ -105,4 +140,5 @@ The project is focused on building a useful Kubernetes cost-estimation tool that
 - [ ] Add support for GCP
 - [ ] Add support for Azure
 - [ ] Improve manifest converter ( Support more types of manifests)
+- []
 
