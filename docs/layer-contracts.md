@@ -46,7 +46,9 @@ Responsibilities:
 
 - parse the manifest
 - support the Kubernetes kinds defined by the MVP
-- extract replicas and resource requests
+- extract replicas and resource requests, including extended resources (e.g. `nvidia.com/gpu`)
+- include native sidecars (`restartPolicy: Always` init containers) alongside regular containers
+- optionally attach `MinReplicas`/`MaxReplicas` from an associated `HorizontalPodAutoscaler` manifest
 - convert quantities such as `500m` and `512Mi`
 - validate required values
 - return errors for malformed or unsupported input

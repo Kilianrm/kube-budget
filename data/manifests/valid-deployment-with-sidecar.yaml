@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: production
+spec:
+  replicas: 1
+  template:
+    spec:
+      initContainers:
+        - name: envoy-sidecar
+          restartPolicy: Always
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+        - name: run-migrations
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+      containers:
+        - name: api
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi

@@ -95,7 +95,7 @@ The project is focused on building a useful Kubernetes cost-estimation tool that
 
 - [x] Create the repository skeleton
 - [x] Create the initial cost estimation core in Go with support for AWS ( basic prices)
-- [ ] Add a converter with support for Kubernetes manifest.
+- [x] Add a converter with support for Kubernetes manifest ( Only Deployment kind)
 - [ ] Implement a CLI plugin similar to kcost
 - [ ] Add support to be used in kubectl.
 - [ ] Add a GitHub Action that compares cost deltas in PRs
@@ -104,4 +104,5 @@ The project is focused on building a useful Kubernetes cost-estimation tool that
 - [ ] Add more workload types and resource coverage
 - [ ] Add support for GCP
 - [ ] Add support for Azure
+- [ ] Improve manifest converter ( Support more types of manifests)
 
