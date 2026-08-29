@@ -6,7 +6,7 @@ import (
 
 	"kube-budget/core/engine"
 	"kube-budget/core/pricing"
-	"kube-budget/core/providers/aws"
+	"kube-budget/internal/providers/aws"
 )
 
 func main() {
@@ -18,7 +18,8 @@ func main() {
 	e := engine.New(cfg)
 
 	workload := engine.Workload{
-		Name: "example-workload",
+		Name:     "example-workload",
+		Replicas: 1,
 		Resources: []pricing.Resource{
 			{Name: "app-container", CPU: 0.5, MemoryGB: 1, StorageGB: 10},
 			{Name: "sidecar", CPU: 0.1, MemoryGB: 0.25, StorageGB: 1},
