@@ -32,27 +32,33 @@ The project will eventually be organized around several components, but only the
 
 ## Architecture
 
-KubeBudget is built around a reusable cost engine that estimates the cost of Kubernetes workloads. The engine is exposed through multiple interfaces, but the current MVP focuses on four main layers: Core engine, CLI plugin, GitHub Actions PR check, and Admission webhook.
+KubeBudget is built around a reusable cost engine. The `kubeestimate` CLI is the entry point and supports two estimation modes: manifest-based estimation and cluster-based estimation. Both modes normalize workload data before sending it to the same cost engine.
 
 ```mermaid
 flowchart TD
-    Input["Raw Kubernetes Manifest"]
-    Converter["Kubernetes Converter"]
-    Core["Core Engine"]
-    CLI["CLI Plugin"]
-    GitHub["GitHub Action PR Check"]
-    Admission["Admission Webhook"]
+   CLI["kubeestimate CLI"]
+   ManifestMode["Manifest mode"]
+   ClusterMode["Cluster mode"]
+   Converter["Manifest converter"]
+   Collector["Cluster workload collector"]
+   Core["Core cost engine"]
+   Pricing["Pricing provider and configuration"]
+   Output["Cost summary"]
 
-    Input --> Converter
-    Converter --> Core
-    Core --> CLI
-    Core --> GitHub
-    Core --> Admission
+   CLI --> ManifestMode
+   CLI --> ClusterMode
+   ManifestMode --> Converter
+   ClusterMode --> Collector
+   Converter --> Core
+   Collector --> Core
+   Pricing --> Core
+   Core --> Output
 ```
 
-- **Core engine** ? accepts a normalized workload model and calculates cost; does not parse Kubernetes YAML.
-- **Kubernetes converter** ? the boundary between raw manifests and the core's normalized model.
-- **CLI plugin** ? developer-facing entry point that calls the core and prints cost summaries.
+- **Core engine** ? accepts a normalized workload model and calculates cost; it does not parse Kubernetes YAML or call the Kubernetes API.
+- **Manifest converter** ? converts raw manifests into the core's normalized model.
+- **Cluster workload collector** ? queries the Kubernetes API and converts selected live workloads into the same normalized model.
+- **CLI** ? developer-facing entry point that selects a mode and prints cost summaries.
 - **GitHub Action PR check** ? CI-level validation that publishes cost deltas on pull requests.
 - **Admission webhook** ? cluster-native enforcement, planned as a later step.
 
@@ -131,14 +137,18 @@ The CLI reads CPU, memory, and ephemeral-storage requests from the manifest. It 
 - [x] Create the repository skeleton
 - [x] Create the initial cost estimation core in Go with support for AWS ( basic prices)
 - [x] Add a converter with support for Kubernetes manifest ( Only Deployment kind)
-- [ ] Implement a CLI plugin similar to kcost
-- [ ] Add support to be used in kubectl.
+- [x] Implement a CLI plugin support.
+- [ ] Implement firest Wails adapter for UI
+- [ ] Implement first dashboard (only manifest mode, one yaml)
+- [ ] Improve dashboard to support múltiples yamls.
 - [ ] Add a GitHub Action that compares cost deltas in PRs
 - [ ] Add Kubernetes admission webhook support
 - [ ] Improve pricing accuracy and configuration
 - [ ] Add more workload types and resource coverage
 - [ ] Add support for GCP
 - [ ] Add support for Azure
+- [ ] Add support to be used in kubectl.
+- [ ] Add a GitHub Action that compares cost deltas in PRs
 - [ ] Improve manifest converter ( Support more types of manifests)
 - []
 
