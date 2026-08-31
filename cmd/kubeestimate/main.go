@@ -8,8 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"kube-budget/core/engine"
-	"kube-budget/internal/converter"
+	manifestmode "kube-budget/internal/application/manifest"
 	"kube-budget/internal/providers/aws"
 )
 
@@ -24,25 +23,37 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if hasManifestFileFlag(args) {
+		return runManifest(args, stdout, stderr)
+	}
+
+	printUsage(stderr)
+	return 2
+}
+
+func printUsage(stderr io.Writer) {
+	fmt.Fprintln(stderr, "Usage: kubeestimate -f <manifest.yaml> [options]")
+	fmt.Fprintln(stderr, "  -f, --file  select Manifest Mode and estimate the provided manifest")
+}
+
+func runManifest(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("kubeestimate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	var manifestPath string
+	flags.StringVar(&manifestPath, "f", "", "Kubernetes manifest file")
+	flags.StringVar(&manifestPath, "file", "", "Kubernetes manifest file")
 	provider := flags.String("provider", defaultProvider, "cloud provider (currently: aws)")
 	region := flags.String("region", defaultRegion, "cloud region (for example: eu-west-1)")
 	instanceType := flags.String("instance-type", defaultInstanceType, "AWS worker node instance type")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: kubeestimate <manifest.yaml> --provider aws --region <region> [--instance-type <type>]")
+		fmt.Fprintln(stderr, "Usage: kubeestimate -f <manifest.yaml> --provider aws --region <region> [--instance-type <type>]")
 		flags.PrintDefaults()
 	}
 
-	manifestPath, flagArgs, ok := splitManifestArgument(args)
-	if !ok {
-		flags.Usage()
+	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if err := flags.Parse(flagArgs); err != nil {
-		return 2
-	}
-	if flags.NArg() != 0 {
+	if manifestPath == "" || flags.NArg() != 0 {
 		flags.Usage()
 		return 2
 	}
@@ -50,13 +61,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unsupported provider %q; supported providers: aws\n", *provider)
 		return 2
 	}
-	if !hasFlag(flagArgs, "provider") {
+	if !hasFlag(args, "provider") {
 		fmt.Fprintf(stderr, "advice: --provider was not specified; assuming %s\n", defaultProvider)
 	}
-	if !hasFlag(flagArgs, "region") {
+	if !hasFlag(args, "region") {
 		fmt.Fprintf(stderr, "advice: --region was not specified; assuming %s\n", defaultRegion)
 	}
-	if !hasFlag(flagArgs, "instance-type") {
+	if !hasFlag(args, "instance-type") {
 		fmt.Fprintf(stderr, "advice: --instance-type was not specified; assuming %s\n", defaultInstanceType)
 	}
 
@@ -65,18 +76,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	manifest, err := os.ReadFile(manifestPath)
+	manifestInput, err := os.ReadFile(manifestPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "read manifest: %v\n", err)
 		return 1
 	}
-	workload, err := converter.ConvertDeployment(manifest)
+	result, err := manifestmode.New(config).Estimate(manifestInput)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
-	estimate := engine.New(config).Estimate(workload)
+	workload := result.Workload
+	estimate := result.Estimate
 	fmt.Fprintf(stdout, "Workload: %s\n", workload.Name)
 	if workload.Namespace != "" {
 		fmt.Fprintf(stdout, "Namespace: %s\n", workload.Namespace)
@@ -105,19 +117,19 @@ func normalizeAWSRegion(region string) string {
 	return strings.ReplaceAll(strings.TrimSpace(region), "west1", "west-1")
 }
 
-func splitManifestArgument(args []string) (string, []string, bool) {
-	for index, argument := range args {
-		if !strings.HasPrefix(argument, "-") {
-			return argument, append(args[:index:index], args[index+1:]...), true
-		}
-	}
-	return "", nil, false
-}
-
 func hasFlag(args []string, name string) bool {
 	prefix := "--" + name
 	for _, argument := range args {
 		if argument == prefix || strings.HasPrefix(argument, prefix+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasManifestFileFlag(args []string) bool {
+	for _, argument := range args {
+		if argument == "-f" || argument == "--file" || strings.HasPrefix(argument, "-f=") || strings.HasPrefix(argument, "--file=") {
 			return true
 		}
 	}
