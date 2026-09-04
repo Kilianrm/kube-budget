@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"kube-budget/core/pricing"
 	manifestmode "kube-budget/internal/application/manifest"
-	"kube-budget/internal/providers/aws"
-	"kube-budget/internal/providers/gcp"
+	"kube-budget/internal/providers"
 )
 
 const (
@@ -89,10 +87,11 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 	}
 
 	provider := strings.ToLower(strings.TrimSpace(request.Provider))
-	if provider != "aws" && provider != "gcp" {
-		return ManifestResult{}, fmt.Errorf("manifest adapter: unsupported provider %q; supported providers: aws, gcp", request.Provider)
+	selectedProvider, ok := providers.Get(provider)
+	if !ok {
+		return ManifestResult{}, fmt.Errorf("manifest adapter: unsupported provider %q; supported providers: %s", request.Provider, strings.Join(providers.Names(), ", "))
 	}
-	region := strings.TrimSpace(request.Region)
+	region := selectedProvider.NormalizeRegion(request.Region)
 	instanceType := strings.TrimSpace(request.InstanceType)
 	if region == "" {
 		return ManifestResult{}, fmt.Errorf("manifest adapter: region is required")
@@ -101,7 +100,7 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 		return ManifestResult{}, fmt.Errorf("manifest adapter: instance type is required")
 	}
 
-	config, err := priceConfig(provider, instanceType, region)
+	config, err := selectedProvider.NewPriceConfig(instanceType, region)
 	if err != nil {
 		return ManifestResult{}, err
 	}
@@ -143,11 +142,4 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 		MinTotal:     result.Estimate.MinTotal,
 		MaxTotal:     result.Estimate.MaxTotal,
 	}, nil
-}
-
-func priceConfig(provider, instanceType, region string) (pricing.PriceConfig, error) {
-	if provider == "gcp" {
-		return gcp.NewPriceConfigForRegion(instanceType, region)
-	}
-	return aws.NewPriceConfigForRegion(instanceType, region)
 }

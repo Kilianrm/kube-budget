@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"kube-budget/internal/providers"
 )
 
 func TestEstimateManifestReturnsUIResult(t *testing.T) {
@@ -56,7 +58,7 @@ func TestEstimateManifestRequiresOneDocument(t *testing.T) {
 func TestEstimateManifestRejectsUnsupportedProvider(t *testing.T) {
 	_, err := NewManifestAdapter().EstimateManifest(ManifestRequest{
 		Documents:    []ManifestDocument{{Content: "manifest"}},
-		Provider:     "azure",
+		Provider:     "oracle",
 		Region:       "us-east-1",
 		InstanceType: "m6i.large",
 	})
@@ -83,5 +85,31 @@ func TestEstimateManifestSupportsGCP(t *testing.T) {
 	}
 	if result.Pricing.Provider != "gcp" || result.Pricing.Region != "us-central1" {
 		t.Errorf("EstimateManifest().Pricing = %#v, want GCP us-central1", result.Pricing)
+	}
+}
+
+func TestEstimateManifestSupportsAzure(t *testing.T) {
+	if names := providers.Names(); len(names) != 3 || names[1] != "azure" {
+		t.Fatalf("providers.Names() = %#v, want AWS, Azure, and GCP", names)
+	}
+	if provider, ok := providers.Get("azure"); !ok || provider.Name() != "azure" {
+		t.Fatalf("providers.Get(azure) = %#v, %v; want Azure provider", provider, ok)
+	}
+	input, err := os.ReadFile("../../../data/manifests/valid-deployment.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	result, err := NewManifestAdapter().EstimateManifest(ManifestRequest{
+		Documents:    []ManifestDocument{{Content: string(input)}},
+		Provider:     "azure",
+		Region:       "eastus",
+		InstanceType: "Standard_D2s_v5",
+	})
+	if err != nil {
+		t.Fatalf("EstimateManifest() error = %v", err)
+	}
+	if result.Pricing.Provider != "azure" || result.Pricing.Region != "eastus" {
+		t.Errorf("EstimateManifest().Pricing = %#v, want Azure eastus", result.Pricing)
 	}
 }

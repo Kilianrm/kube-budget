@@ -46,9 +46,7 @@ spec:
               cpu: 500m
               memory: 512Mi
               ephemeral-storage: 1Gi
-`;
-
-type Provider = "aws" | "gcp";
+`;type Provider = "aws" | "azure" | "gcp";
 
 const providerCatalog: Record<Provider, Record<string, string[]>> = {
   aws: {
@@ -58,6 +56,10 @@ const providerCatalog: Record<Provider, Record<string, string[]>> = {
   gcp: {
     "us-central1": ["e2-standard-2", "e2-standard-4", "n2-standard-2"],
     "europe-west1": ["e2-standard-2", "e2-standard-4", "n2-standard-2"],
+  },
+  azure: {
+    eastus: ["Standard_D2s_v5", "Standard_D4s_v5", "Standard_F2s_v2"],
+    westeurope: ["Standard_D2s_v5", "Standard_D4s_v5", "Standard_F2s_v2"],
   },
 };
 
@@ -237,13 +239,16 @@ function App() {
                 <div className="select-wrap">
                   <select value={provider} onChange={(event) => {
                     const nextProvider = event.target.value as Provider;
-                    const nextRegion = nextProvider === "aws" ? "us-east-1" : "us-central1";
+                    const nextRegion = nextProvider === "aws"
+                      ? "us-east-1"
+                      : nextProvider === "gcp" ? "us-central1" : "eastus";
                     setProvider(nextProvider);
                     setRegion(nextRegion);
                     setInstanceType(providerCatalog[nextProvider][nextRegion][0]);
                     setResult(null);
                   }}>
                     <option value="aws">AWS</option>
+                    <option value="azure">Azure</option>
                     <option value="gcp">GCP</option>
                   </select><ChevronDown size={15} />
                 </div>
