@@ -131,6 +131,31 @@ kubeestimate deployment.yaml --provider aws --region eu-west-1 --instance-type c
 
 The CLI reads CPU, memory, and ephemeral-storage requests from the manifest. It currently supports Deployment manifests and illustrative AWS pricing snapshots for `us-east-1` and `eu-west-1`. The node type is used to derive the cost attributed to those requested resources. Output includes hourly and daily USD estimates; the daily total is the hourly total multiplied by 24. AWS region identifiers use hyphens, so use `eu-west-1` rather than `eu-west1`.
 
+## Local dashboard
+
+The first dashboard is a React and TypeScript frontend embedded in a Wails desktop application. It accepts one Deployment manifest through file selection, drag and drop, or pasted YAML and displays its hourly, daily, and monthly requested cost. The generated Wails bridge calls the Go manifest adapter, which delegates estimation to the same Manifest Mode application service used by other entry points.
+
+Install the Wails CLI and frontend dependencies:
+
+```sh
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+cd frontend && npm install && cd ..
+```
+
+On Ubuntu, install the native desktop dependencies. Ubuntu 24.04 and newer use WebKitGTK 4.1:
+
+```sh
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+```
+
+Start the desktop dashboard from the repository root:
+
+```sh
+wails dev -tags webkit2_41
+```
+
+Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work on the visual frontend without launching the desktop shell, run `npm run dev` from `frontend`; cost estimation is only available when the page runs inside Wails.
+
 
 ## Roadmap
 
@@ -138,17 +163,23 @@ The CLI reads CPU, memory, and ephemeral-storage requests from the manifest. It 
 - [x] Create the initial cost estimation core in Go with support for AWS ( basic prices)
 - [x] Add a converter with support for Kubernetes manifest ( Only Deployment kind)
 - [x] Implement a CLI plugin support.
-- [ ] Implement firest Wails adapter for UI
-- [ ] Implement first dashboard (only manifest mode, one yaml)
-- [ ] Improve dashboard to support múltiples yamls.
+- [x] Implement first Wails adapter for UI
+- [x] Implement first dashboard (only manifest mode, one yaml)
+- [ ] Add cost estimation support for GCP
+- [ ] Add cost estimation support for Azure
+- [ ] Add multi-cloud/provider pricing comparisong using a toogler in cost estimation section.
+- [ ] Store log and show logs of the previous simulations
+- [ ] Add estimation comparison between two yaml.
+...
+- [ ] Start conection to clusters...
+...
+...
+...
 - [ ] Add a GitHub Action that compares cost deltas in PRs
 - [ ] Add Kubernetes admission webhook support
 - [ ] Improve pricing accuracy and configuration
 - [ ] Add more workload types and resource coverage
-- [ ] Add support for GCP
-- [ ] Add support for Azure
 - [ ] Add support to be used in kubectl.
 - [ ] Add a GitHub Action that compares cost deltas in PRs
 - [ ] Improve manifest converter ( Support more types of manifests)
-- []
 
