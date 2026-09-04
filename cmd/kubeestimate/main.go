@@ -9,13 +9,11 @@ import (
 	"strings"
 
 	manifestmode "kube-budget/internal/application/manifest"
-	"kube-budget/internal/providers/aws"
+	"kube-budget/internal/providers"
 )
 
 const (
-	defaultProvider     = "aws"
-	defaultRegion       = "us-east-1"
-	defaultInstanceType = "m6i.large"
+	defaultProvider = "aws"
 )
 
 func main() {
@@ -42,11 +40,11 @@ func runManifest(args []string, stdout, stderr io.Writer) int {
 	var manifestPath string
 	flags.StringVar(&manifestPath, "f", "", "Kubernetes manifest file")
 	flags.StringVar(&manifestPath, "file", "", "Kubernetes manifest file")
-	provider := flags.String("provider", defaultProvider, "cloud provider (currently: aws)")
-	region := flags.String("region", defaultRegion, "cloud region (for example: eu-west-1)")
-	instanceType := flags.String("instance-type", defaultInstanceType, "AWS worker node instance type")
+	provider := flags.String("provider", defaultProvider, "registered cloud provider")
+	region := flags.String("region", "", "cloud region (for example: eu-west-1 or us-central1)")
+	instanceType := flags.String("instance-type", "", "worker node machine type")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: kubeestimate -f <manifest.yaml> --provider aws --region <region> [--instance-type <type>]")
+		fmt.Fprintf(stderr, "Usage: kubeestimate -f <manifest.yaml> --provider <%s> --region <region> [--instance-type <type>]\n", strings.Join(providers.Names(), "|"))
 		flags.PrintDefaults()
 	}
 
@@ -57,9 +55,18 @@ func runManifest(args []string, stdout, stderr io.Writer) int {
 		flags.Usage()
 		return 2
 	}
-	if *provider != "aws" {
-		fmt.Fprintf(stderr, "unsupported provider %q; supported providers: aws\n", *provider)
+	providerName := strings.ToLower(strings.TrimSpace(*provider))
+	selectedProvider, ok := providers.Get(providerName)
+	if !ok {
+		fmt.Fprintf(stderr, "unsupported provider %q; supported providers: %s\n", *provider, strings.Join(providers.Names(), ", "))
 		return 2
+	}
+	defaultRegion, defaultInstanceType := selectedProvider.DefaultRegion(), selectedProvider.DefaultMachineType()
+	if *region == "" {
+		*region = defaultRegion
+	}
+	if *instanceType == "" {
+		*instanceType = defaultInstanceType
 	}
 	if !hasFlag(args, "provider") {
 		fmt.Fprintf(stderr, "advice: --provider was not specified; assuming %s\n", defaultProvider)
@@ -71,7 +78,8 @@ func runManifest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "advice: --instance-type was not specified; assuming %s\n", defaultInstanceType)
 	}
 
-	config, err := aws.NewPriceConfigForRegion(*instanceType, normalizeAWSRegion(*region))
+	regionValue := selectedProvider.NormalizeRegion(*region)
+	config, err := selectedProvider.NewPriceConfig(*instanceType, regionValue)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -93,7 +101,7 @@ func runManifest(args []string, stdout, stderr io.Writer) int {
 	if workload.Namespace != "" {
 		fmt.Fprintf(stdout, "Namespace: %s\n", workload.Namespace)
 	}
-	fmt.Fprintf(stdout, "Provider: aws (%s)\n", normalizeAWSRegion(*region))
+	fmt.Fprintf(stdout, "Provider: %s (%s)\n", providerName, regionValue)
 	fmt.Fprintf(stdout, "Instance type: %s\n", *instanceType)
 	fmt.Fprintf(stdout, "Replicas: %d\n", workload.Replicas)
 	fmt.Fprintf(stdout, "Hourly total: %.4f %s\n", estimate.Total, estimate.Currency)
@@ -111,10 +119,6 @@ func runManifest(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "Monthly total: %.4f %s\n", estimate.Total*24*30, estimate.Currency)
 
 	return 0
-}
-
-func normalizeAWSRegion(region string) string {
-	return strings.ReplaceAll(strings.TrimSpace(region), "west1", "west-1")
 }
 
 func hasFlag(args []string, name string) bool {
