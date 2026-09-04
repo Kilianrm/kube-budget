@@ -56,12 +56,32 @@ func TestEstimateManifestRequiresOneDocument(t *testing.T) {
 func TestEstimateManifestRejectsUnsupportedProvider(t *testing.T) {
 	_, err := NewManifestAdapter().EstimateManifest(ManifestRequest{
 		Documents:    []ManifestDocument{{Content: "manifest"}},
-		Provider:     "gcp",
+		Provider:     "azure",
 		Region:       "us-east-1",
 		InstanceType: "m6i.large",
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider") {
 		t.Fatalf("EstimateManifest() error = %v, want unsupported provider error", err)
+	}
+}
+
+func TestEstimateManifestSupportsGCP(t *testing.T) {
+	input, err := os.ReadFile("../../../data/manifests/valid-deployment.yaml")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	result, err := NewManifestAdapter().EstimateManifest(ManifestRequest{
+		Documents:    []ManifestDocument{{Content: string(input)}},
+		Provider:     "gcp",
+		Region:       "us-central1",
+		InstanceType: "e2-standard-2",
+	})
+	if err != nil {
+		t.Fatalf("EstimateManifest() error = %v", err)
+	}
+	if result.Pricing.Provider != "gcp" || result.Pricing.Region != "us-central1" {
+		t.Errorf("EstimateManifest().Pricing = %#v, want GCP us-central1", result.Pricing)
 	}
 }

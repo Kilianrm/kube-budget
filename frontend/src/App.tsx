@@ -48,9 +48,17 @@ spec:
               ephemeral-storage: 1Gi
 `;
 
-const regionInstances: Record<string, string[]> = {
-  "us-east-1": ["m6i.large", "m6i.xlarge", "c6i.large", "t3.medium"],
-  "eu-west-1": ["m6i.large", "m6i.xlarge", "c6i.large", "t3.medium"],
+type Provider = "aws" | "gcp";
+
+const providerCatalog: Record<Provider, Record<string, string[]>> = {
+  aws: {
+    "us-east-1": ["m6i.large", "m6i.xlarge", "c6i.large", "t3.medium"],
+    "eu-west-1": ["m6i.large", "m6i.xlarge", "c6i.large", "t3.medium"],
+  },
+  gcp: {
+    "us-central1": ["e2-standard-2", "e2-standard-4", "n2-standard-2"],
+    "europe-west1": ["e2-standard-2", "e2-standard-4", "n2-standard-2"],
+  },
 };
 
 type ResultTab = "overview" | "resources" | "source";
@@ -70,6 +78,7 @@ function App() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [manifest, setManifest] = useState("");
+  const [provider, setProvider] = useState<Provider>("aws");
   const [region, setRegion] = useState("us-east-1");
   const [instanceType, setInstanceType] = useState("m6i.large");
   const [result, setResult] = useState<ManifestResult | null>(null);
@@ -132,7 +141,7 @@ function App() {
     try {
       const estimate = await estimateManifest({
         documents: [{ name: fileName || "untitled.yaml", content: manifest }],
-        provider: "aws",
+        provider,
         region,
         instanceType,
       });
@@ -225,13 +234,25 @@ function App() {
             <div className="control-grid">
               <label className="select-field">
                 <span>Provider</span>
-                <div className="select-wrap"><select value="aws" disabled><option>AWS</option></select><ChevronDown size={15} /></div>
+                <div className="select-wrap">
+                  <select value={provider} onChange={(event) => {
+                    const nextProvider = event.target.value as Provider;
+                    const nextRegion = nextProvider === "aws" ? "us-east-1" : "us-central1";
+                    setProvider(nextProvider);
+                    setRegion(nextRegion);
+                    setInstanceType(providerCatalog[nextProvider][nextRegion][0]);
+                    setResult(null);
+                  }}>
+                    <option value="aws">AWS</option>
+                    <option value="gcp">GCP</option>
+                  </select><ChevronDown size={15} />
+                </div>
               </label>
               <label className="select-field">
                 <span>Region</span>
                 <div className="select-wrap">
-                  <select value={region} onChange={(event) => { setRegion(event.target.value); setInstanceType("m6i.large"); setResult(null); }}>
-                    {Object.keys(regionInstances).map((value) => <option key={value}>{value}</option>)}
+                  <select value={region} onChange={(event) => { setRegion(event.target.value); setInstanceType(providerCatalog[provider][event.target.value][0]); setResult(null); }}>
+                    {Object.keys(providerCatalog[provider]).map((value) => <option key={value}>{value}</option>)}
                   </select><ChevronDown size={15} />
                 </div>
               </label>
@@ -239,7 +260,7 @@ function App() {
                 <span>Worker instance</span>
                 <div className="select-wrap">
                   <select value={instanceType} onChange={(event) => { setInstanceType(event.target.value); setResult(null); }}>
-                    {regionInstances[region].map((value) => <option key={value}>{value}</option>)}
+                    {(providerCatalog[provider][region] ?? []).map((value) => <option key={value}>{value}</option>)}
                   </select><ChevronDown size={15} />
                 </div>
               </label>
@@ -426,7 +447,7 @@ function Overview({ result }: { result: ManifestResult }) {
         <dl className="detail-list">
           <div><dt>Kind</dt><dd>Deployment</dd></div>
           <div><dt>Namespace</dt><dd>{result.workload.namespace || "default"}</dd></div>
-          <div><dt>Provider</dt><dd>AWS / {result.pricing.region}</dd></div>
+          <div><dt>Provider</dt><dd>{result.pricing.provider.toUpperCase()} / {result.pricing.region}</dd></div>
           <div><dt>Worker node</dt><dd>{result.pricing.instanceType}</dd></div>
         </dl>
       </section>
