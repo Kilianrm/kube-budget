@@ -3,9 +3,35 @@ package aws
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"kube-budget/core/pricing"
 )
+
+// Provider implements the shared pricing-provider contract for AWS.
+type Provider struct{}
+
+// New creates an AWS pricing provider.
+func New() Provider {
+	return Provider{}
+}
+
+func (Provider) Name() string {
+	return "aws"
+}
+
+func (Provider) DefaultRegion() string {
+	return "us-east-1"
+}
+
+func (Provider) DefaultMachineType() string {
+	return "m6i.large"
+}
+
+func (Provider) NormalizeRegion(region string) string {
+	return strings.ReplaceAll(strings.TrimSpace(region), "west1", "west-1")
+}
 
 // instanceType describes the on-demand shape of an EC2 instance used as an EKS worker node.
 type instanceType struct {
@@ -39,6 +65,12 @@ const cpuCostShare = 0.5
 // NewPriceConfigForRegion derives a resource-price model from an AWS worker
 // node type in the selected region.
 func NewPriceConfigForRegion(instanceType, region string) (pricing.PriceConfig, error) {
+	return New().NewPriceConfig(instanceType, region)
+}
+
+// NewPriceConfig derives a resource-price model from an AWS worker node type
+// in the selected region.
+func (Provider) NewPriceConfig(instanceType, region string) (pricing.PriceConfig, error) {
 	regionCatalog, ok := instanceCatalog[region]
 	if !ok {
 		return pricing.PriceConfig{}, fmt.Errorf("aws: unsupported region %q", region)
@@ -52,4 +84,21 @@ func NewPriceConfigForRegion(instanceType, region string) (pricing.PriceConfig, 
 		MemoryUSDPerGB:  (instance.HourlyUSD * (1 - cpuCostShare)) / instance.MemoryGB,
 		StorageUSDPerGB: ebsGP3USDPerGBMonth / hoursPerMonth,
 	}, nil
+}
+
+func (Provider) Regions() []string {
+	return sortedKeys(instanceCatalog)
+}
+
+func (Provider) MachineTypes(region string) []string {
+	return sortedKeys(instanceCatalog[region])
+}
+
+func sortedKeys[T any](values map[string]T) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
