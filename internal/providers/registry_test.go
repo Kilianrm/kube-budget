@@ -4,8 +4,8 @@ import "testing"
 
 func TestNamesReturnsRegisteredProviders(t *testing.T) {
 	names := Names()
-	if len(names) != 2 || names[0] != "aws" || names[1] != "gcp" {
-		t.Fatalf("Names() = %#v, want [aws gcp]", names)
+	if len(names) != 3 || names[0] != "aws" || names[1] != "azure" || names[2] != "gcp" {
+		t.Fatalf("Names() = %#v, want [aws azure gcp]", names)
 	}
 }
 
@@ -17,6 +17,7 @@ func TestGetReturnsUsableProviderContract(t *testing.T) {
 		wantProvider string
 	}{
 		{name: "aws", region: "us-east-1", machineType: "m6i.large", wantProvider: "aws"},
+		{name: "azure", region: "eastus", machineType: "Standard_D2s_v5", wantProvider: "azure"},
 		{name: "gcp", region: "us-central1", machineType: "e2-standard-2", wantProvider: "gcp"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -47,7 +48,7 @@ func TestGetNormalizesProviderName(t *testing.T) {
 }
 
 func TestGetRejectsUnknownProvider(t *testing.T) {
-	if _, ok := Get("azure"); ok {
-		t.Fatalf("Get(azure) found an unregistered provider")
+	if _, ok := Get("oracle"); ok {
+		t.Fatalf("Get(oracle) found an unregistered provider")
 	}
 }

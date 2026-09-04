@@ -5,12 +5,14 @@ import (
 	"strings"
 
 	"kube-budget/internal/providers/aws"
+	"kube-budget/internal/providers/azure"
 	"kube-budget/internal/providers/gcp"
 )
 
 var registry = map[string]Provider{
-	"aws": aws.New(),
-	"gcp": gcp.New(),
+	"aws":   aws.New(),
+	"azure": azure.New(),
+	"gcp":   gcp.New(),
 }
 
 // Get returns the provider registered under name.
