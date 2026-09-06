@@ -6,9 +6,15 @@ export interface ManifestRequest {
     name: string;
     content: string;
   }>;
-  provider: string;
-  region: string;
-  instanceType: string;
+  provider?: string;
+  region?: string;
+  instanceType?: string;
+  useClusterData?: boolean;
+  clusterInfo?: {
+    name: string;
+    context?: string;
+    namespace: string;
+  };
 }
 
 export type ManifestResult = wails.ManifestResult;

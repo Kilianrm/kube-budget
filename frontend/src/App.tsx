@@ -5,12 +5,14 @@ import {
   Check,
   ChevronDown,
   CircleDollarSign,
+  Clock,
   Cloud,
   Code2,
   FileCode2,
   Gauge,
   KeyRound,
   Layers3,
+  Lightbulb,
   LoaderCircle,
   Network,
   PlugZap,
@@ -19,9 +21,15 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   UploadCloud,
+  X,
+  Zap,
 } from "lucide-react";
-import { ChangeEvent, DragEvent, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
 import { estimateManifest, ManifestResult } from "./backend";
+import { ClusterProvider, useCluster } from "./ClusterContext";
+import { ConnectionModal } from "./ConnectionModal";
+import { EstimationHistoryProvider, useEstimationHistory, SavedEstimation } from "./EstimationHistory";
+import { EstimationRegistry } from "./HistoryPanel";
 
 const exampleManifest = `apiVersion: apps/v1
 kind: Deployment
@@ -64,7 +72,7 @@ const providerCatalog: Record<Provider, Record<string, string[]>> = {
 };
 
 type ResultTab = "overview" | "resources" | "source";
-type AppSection = "estimate" | "cluster";
+type AppSection = "estimate" | "cluster" | "optimization";
 
 function formatMoney(value: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", {
@@ -75,8 +83,17 @@ function formatMoney(value: number, currency = "USD") {
   }).format(value);
 }
 
-function App() {
+type EstimationMode = "manual" | "cluster";
+type EstimateView = "estimator" | "registry";
+
+function AppContent() {
+  const { isConnected, clusterConnection } = useCluster();
+  const { saveEstimation } = useEstimationHistory();
   const [activeSection, setActiveSection] = useState<AppSection>("estimate");
+  const [estimateView, setEstimateView] = useState<EstimateView>("estimator");
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [estimationMode, setEstimationMode] = useState<EstimationMode>("manual");
+  const [showConnectHint, setShowConnectHint] = useState(true);
   const fileInput = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [manifest, setManifest] = useState("");
@@ -88,6 +105,14 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Auto-switch to cluster mode when cluster is connected
+  useEffect(() => {
+    if (isConnected()) {
+      setEstimationMode("cluster");
+      setShowConnectHint(false);
+    }
+  }, [isConnected()]);
 
   function acceptFile(file?: File) {
     if (!file) return;
@@ -138,17 +163,38 @@ function App() {
       return;
     }
 
+    if (estimationMode === "cluster" && !isConnected()) {
+      setError("No cluster connected. Please connect a cluster or switch to manual pricing mode.");
+      return;
+    }
+
     setIsLoading(true);
     setError("");
     try {
       const estimate = await estimateManifest({
         documents: [{ name: fileName || "untitled.yaml", content: manifest }],
-        provider,
-        region,
-        instanceType,
+        provider: estimationMode === "manual" ? provider : undefined,
+        region: estimationMode === "manual" ? region : undefined,
+        instanceType: estimationMode === "manual" ? instanceType : undefined,
+        useClusterData: estimationMode === "cluster" && isConnected() ? true : false,
+        clusterInfo: estimationMode === "cluster" && isConnected() && clusterConnection ? clusterConnection : undefined,
       });
       setResult(estimate);
       setActiveTab("overview");
+
+      // Save to history
+      saveEstimation({
+        name: fileName || "untitled.yaml",
+        estimationMode,
+        provider: estimationMode === "manual" ? provider : undefined,
+        region: estimationMode === "manual" ? region : undefined,
+        instanceType: estimationMode === "manual" ? instanceType : undefined,
+        clusterName: estimationMode === "cluster" ? clusterConnection?.name : undefined,
+        monthlyCost: estimate.monthlyTotal,
+        currency: estimate.currency,
+        manifest,
+        fullResult: estimate,
+      });
     } catch (reason) {
       setResult(null);
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -157,26 +203,42 @@ function App() {
     }
   }
 
+  function handleRestoreEstimation(estimation: SavedEstimation) {
+    setFileName(estimation.name);
+    setManifest(estimation.manifest);
+    setResult(estimation.fullResult);
+    setActiveTab("overview");
+
+    if (estimation.estimationMode === "manual") {
+      setEstimationMode("manual");
+      if (estimation.provider) setProvider(estimation.provider as Provider);
+      if (estimation.region) setRegion(estimation.region);
+      if (estimation.instanceType) setInstanceType(estimation.instanceType);
+    } else {
+      setEstimationMode("cluster");
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className={`brand-mark ${activeSection === "cluster" ? "cluster" : ""}`} aria-hidden="true">
-            {activeSection === "estimate" ? <Gauge size={21} /> : <Network size={21} />}
+          <div className={`brand-mark ${activeSection === "cluster" ? "cluster" : activeSection === "optimization" ? "optimization" : ""}`} aria-hidden="true">
+            {activeSection === "estimate" ? <CircleDollarSign size={21} /> : activeSection === "cluster" ? <Network size={21} /> : <Lightbulb size={21} />}
           </div>
           <div>
             <strong>KubeBudget</strong>
-            <span>{activeSection === "estimate" ? "Manifest workspace" : "Cluster workspace"}</span>
+            <span>{activeSection === "estimate" ? "Manifest workspace" : activeSection === "cluster" ? "Cluster workspace" : "Optimization workspace"}</span>
           </div>
         </div>
         <nav className="primary-nav" aria-label="Main sections">
           <button
             type="button"
             className={activeSection === "estimate" ? "active estimate" : ""}
-            onClick={() => setActiveSection("estimate")}
+            onClick={() => { setActiveSection("estimate"); setEstimateView("estimator"); }}
             aria-current={activeSection === "estimate" ? "page" : undefined}
           >
-            <CircleDollarSign size={16} /> Cost estimation
+            <CircleDollarSign size={16} /> Manifest
           </button>
           <button
             type="button"
@@ -184,13 +246,39 @@ function App() {
             onClick={() => setActiveSection("cluster")}
             aria-current={activeSection === "cluster" ? "page" : undefined}
           >
-            <Network size={16} /> Connect cluster
+            <Network size={16} /> Cluster
+          </button>
+          <button
+            type="button"
+            className={activeSection === "optimization" ? "active optimization" : ""}
+            onClick={() => setActiveSection("optimization")}
+            aria-current={activeSection === "optimization" ? "page" : undefined}
+          >
+            <Lightbulb size={16} /> Optimization
           </button>
         </nav>
-        <div className="runtime-status"><span className="status-dot" /> Local desktop</div>
+        <button
+          type="button"
+          className={`cluster-status-button ${isConnected() ? "connected" : "disconnected"}`}
+          onClick={() => setIsModalOpen(true)}
+          title={isConnected() ? `Connected to ${clusterConnection?.name}` : "Click to connect a cluster"}
+        >
+          <Zap size={16} />
+          <span>{isConnected() ? clusterConnection?.name || "Connected" : "Not connected"}</span>
+        </button>
       </header>
 
-      {activeSection === "estimate" ? <section className="workspace">
+      <ConnectionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+
+      <div className="app-body">
+        {activeSection === "estimate" && <aside className="app-sidebar" aria-label="Estimator navigation">
+          <span className="sidebar-label">WORKSPACE</span>
+          <button type="button" className={estimateView === "estimator" ? "active" : ""} onClick={() => setEstimateView("estimator")}><Gauge size={17} /><span>Estimator</span></button>
+          <button type="button" className={estimateView === "registry" ? "active" : ""} onClick={() => setEstimateView("registry")}><Clock size={17} /><span>Saved estimates</span></button>
+        </aside>}
+        {activeSection === "cluster" && isConnected() && <ClusterManagementPanel />}
+        <div className="app-main">
+      {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "optimization" ? <OptimizationPanel /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace ${result ? "has-result" : "manifest-stage"}`}>
         <aside className="input-pane">
           <div className="pane-heading">
             <div><span className="step-label">01 / INPUT</span><h1>Manifest</h1></div>
@@ -231,7 +319,82 @@ function App() {
             spellCheck={false}
           />
 
-          <div className="pricing-section">
+          <div className="estimation-mode-section">
+            <div className="mode-header">
+              <span className="mode-label">Estimation source</span>
+              {!isConnected() && (
+                <button
+                  type="button"
+                  className="quick-connect-button"
+                  onClick={() => setIsModalOpen(true)}
+                  title="Connect a cluster to enable better estimates"
+                >
+                  <PlugZap size={14} />
+                  Connect cluster
+                </button>
+              )}
+            </div>
+            <div className="mode-selector" role="group" aria-label="Estimation mode">
+              <button
+                type="button"
+                className={`mode-button ${estimationMode === "manual" ? "active" : ""}`}
+                onClick={() => {
+                  setEstimationMode("manual");
+                  setResult(null);
+                }}
+                title="Use manual pricing assumptions"
+              >
+                <Cloud size={16} />
+                <span>
+                  <strong>Manual Pricing</strong>
+                  <small>Set custom provider & instance</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`mode-button ${estimationMode === "cluster" ? "active" : ""} ${!isConnected() ? "disabled" : ""}`}
+                onClick={() => {
+                  if (isConnected()) {
+                    setEstimationMode("cluster");
+                    setResult(null);
+                  }
+                }}
+                disabled={!isConnected()}
+                title={isConnected() ? "Use connected cluster data for better accuracy" : "Connect a cluster first"}
+              >
+                <Network size={16} />
+                <span>
+                  <strong>From Cluster</strong>
+                  <small>{isConnected() ? clusterConnection?.name : "Connect a cluster"}</small>
+                </span>
+                <span className={`value-badge ${isConnected() ? "connected" : "disconnected"}`}>
+                  {isConnected() ? "More accurate" : "Connect to activate"}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {!isConnected() && showConnectHint && (
+            <div className="onboarding-hint">
+              <div className="hint-content">
+                <Lightbulb size={16} />
+                <div>
+                  <strong>Pro tip: Connect a cluster</strong>
+                  <p>Get more accurate cost estimates by connecting your Kubernetes cluster. We'll automatically use live workload data.</p>
+                </div>
+                <button
+                  type="button"
+                  className="hint-close-button"
+                  onClick={() => setShowConnectHint(false)}
+                  aria-label="Dismiss hint"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {estimationMode === "manual" && <div className="pricing-section">
             <div className="section-title"><Cloud size={16} /><span>Pricing assumptions</span></div>
             <div className="control-grid">
               <label className="select-field">
@@ -271,6 +434,7 @@ function App() {
               </label>
             </div>
           </div>
+          }
 
           {error && <div className="error-message" role="alert"><AlertCircle size={17} /><span>{error}</span></div>}
 
@@ -284,7 +448,7 @@ function App() {
         <section className="result-pane">
           <div className="pane-heading result-heading">
             <div><span className="step-label">02 / ESTIMATE</span><h2>{result ? result.workload.name : "Cost analysis"}</h2></div>
-            {result && <div className="valid-badge"><Check size={14} /> Valid deployment</div>}
+            {result && <div className="result-heading-actions"><button type="button" className="new-estimate-button" onClick={resetWorkspace}><RotateCcw size={14} /> New estimate</button><div className="valid-badge"><Check size={14} /> Valid deployment</div></div>}
           </div>
 
           {!result ? (
@@ -323,111 +487,124 @@ function App() {
             </div>
           )}
         </section>
-      </section> : <ClusterConnection />}
+      </section>}
+        </div>
+      </div>
     </main>
   );
 }
 
+function ClusterLockedState({ onConnectClick }: { onConnectClick: () => void }) {
+  return (
+    <section className="cluster-workspace cluster-locked">
+      <div className="cluster-locked-content">
+        <div className="locked-visual" aria-hidden="true">
+          <div className="locked-icon"><AlertCircle size={48} /></div>
+        </div>
+        <h2>Cluster management locked</h2>
+        <p>Connect to a Kubernetes cluster to access cluster management features and view live workload data.</p>
+        <button className="primary-button" type="button" onClick={onConnectClick}>
+          <PlugZap size={18} />
+          <span>Connect a cluster</span>
+          <ArrowRight size={18} />
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ClusterManagementPanel() {
+  return (
+    <aside className="cluster-sidebar" aria-label="Cluster management options">
+      <span className="sidebar-label">CLUSTER</span>
+      <div className="sidebar-placeholder">
+        <Lightbulb size={18} />
+        <p>Management options coming soon</p>
+      </div>
+    </aside>
+  );
+}
+
 function ClusterConnection() {
-  const [source, setSource] = useState<"kubeconfig" | "manual">("kubeconfig");
-  const [connectionName, setConnectionName] = useState("Local development");
-  const [kubeconfigPath, setKubeconfigPath] = useState("~/.kube/config");
-  const [context, setContext] = useState("docker-desktop");
-  const [namespace, setNamespace] = useState("All namespaces");
-  const [notice, setNotice] = useState("");
+  const { isConnected, clusterConnection } = useCluster();
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  if (!isConnected()) {
+    return (
+      <>
+        <ClusterLockedState onConnectClick={() => setIsModalOpen(true)} />
+        <ConnectionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      </>
+    );
+  }
 
   return (
-    <section className="cluster-workspace">
-      <div className="cluster-intro">
-        <div>
-          <span className="cluster-eyebrow">KUBERNETES ACCESS</span>
-          <h1>Connect a cluster</h1>
-          <p>Configure the local credentials and scope KubeBudget will use to inspect live workloads.</p>
+    <>
+      <section className="cluster-management-view">
+        <div className="management-header">
+          <div>
+            <span className="step-label">CLUSTER</span>
+            <h1>{clusterConnection?.name || "Connected Cluster"}</h1>
+            <p>Manage and monitor your connected Kubernetes cluster</p>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() => setIsModalOpen(true)}
+            title="Edit cluster connection"
+            aria-label="Edit cluster connection"
+          >
+            <Gauge size={17} />
+          </button>
         </div>
-        <div className="cluster-state"><span /> Not connected</div>
-      </div>
 
-      <div className="cluster-layout">
-        <form className="connection-form" onSubmit={(event) => { event.preventDefault(); setNotice("Cluster connectivity is not available in this UI-only version."); }}>
-          <div className="form-section-heading">
-            <div className="cluster-icon"><KeyRound size={18} /></div>
-            <div><span>01 / CREDENTIALS</span><h2>Connection source</h2></div>
+        <div className="empty-state">
+          <div className="empty-visual" aria-hidden="true">
+            <div className="visual-node visual-main"><Network size={27} /></div>
+            <div className="visual-node visual-one"><Boxes size={18} /></div>
+            <div className="visual-node visual-two"><Layers3 size={18} /></div>
+            <div className="visual-node visual-three"><ServerCog size={18} /></div>
+            <span className="connector connector-one" /><span className="connector connector-two" /><span className="connector connector-three" />
           </div>
-
-          <div className="source-control" role="group" aria-label="Connection source">
-            <button type="button" className={source === "kubeconfig" ? "active" : ""} onClick={() => { setSource("kubeconfig"); setNotice(""); }}>
-              <Code2 size={16} /><span><strong>Kubeconfig</strong><small>Use a local configuration file</small></span>
-            </button>
-            <button type="button" className={source === "manual" ? "active" : ""} onClick={() => { setSource("manual"); setNotice(""); }}>
-              <SlidersHorizontal size={16} /><span><strong>Manual</strong><small>Enter API server details</small></span>
-            </button>
+          <h3>Cluster features coming soon</h3>
+          <p>Additional cluster management features will be available in future releases. For now, you can use this cluster for accurate cost estimation in the Manifest section.</p>
+          <div className="empty-capabilities">
+            <span><Check size={14} /> Live workload inspection</span>
+            <span><Check size={14} /> Real-time metrics</span>
+            <span><Check size={14} /> Cluster insights</span>
           </div>
+        </div>
+      </section>
+      <ConnectionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+    </>
+  );
+}
 
-          <div className="cluster-fields">
-            <label className="cluster-field full-width">
-              <span>Connection name</span>
-              <input value={connectionName} onChange={(event) => setConnectionName(event.target.value)} placeholder="Production cluster" />
-            </label>
-
-            {source === "kubeconfig" ? <>
-              <label className="cluster-field full-width">
-                <span>Kubeconfig path</span>
-                <div className="path-input"><input value={kubeconfigPath} onChange={(event) => setKubeconfigPath(event.target.value)} /><button type="button" title="Choose kubeconfig file" aria-label="Choose kubeconfig file"><FileCode2 size={17} /></button></div>
-              </label>
-              <label className="cluster-field full-width">
-                <span>Context</span>
-                <div className="select-wrap cluster-select"><select value={context} onChange={(event) => setContext(event.target.value)}><option>docker-desktop</option><option>minikube</option><option>kind-local</option></select><ChevronDown size={15} /></div>
-              </label>
-            </> : <>
-              <label className="cluster-field full-width">
-                <span>API server URL</span>
-                <input type="url" placeholder="https://kubernetes.example.com:6443" />
-              </label>
-              <label className="cluster-field">
-                <span>Bearer token</span>
-                <input type="password" placeholder="Token" autoComplete="off" />
-              </label>
-              <label className="cluster-field">
-                <span>CA certificate</span>
-                <input placeholder="Certificate path" />
-              </label>
-            </>}
+function OptimizationPanel() {
+  return (
+    <section className="optimization-workspace">
+      <div className="optimization-content">
+        <div className="optimization-visual" aria-hidden="true">
+          <div className="optimization-icon"><Lightbulb size={48} /></div>
+        </div>
+        <h2>Optimization features</h2>
+        <p>Discover recommendations to optimize your Kubernetes workloads and reduce costs.</p>
+        <div className="empty-state">
+          <div className="empty-visual" aria-hidden="true">
+            <div className="visual-node visual-main"><Lightbulb size={27} /></div>
+            <div className="visual-node visual-one"><Gauge size={18} /></div>
+            <div className="visual-node visual-two"><Layers3 size={18} /></div>
+            <div className="visual-node visual-three"><ServerCog size={18} /></div>
+            <span className="connector connector-one" /><span className="connector connector-two" /><span className="connector connector-three" />
           </div>
-
-          <div className="form-divider" />
-          <div className="form-section-heading compact">
-            <div className="cluster-icon"><Network size={18} /></div>
-            <div><span>02 / SCOPE</span><h2>Workload access</h2></div>
+          <h3>Optimization recommendations coming soon</h3>
+          <p>Get actionable insights to optimize your Kubernetes clusters for better performance and reduced costs.</p>
+          <div className="empty-capabilities">
+            <span><Check size={14} /> Resource optimization</span>
+            <span><Check size={14} /> Cost reduction tips</span>
+            <span><Check size={14} /> Performance insights</span>
           </div>
-          <label className="cluster-field full-width">
-            <span>Namespace scope</span>
-            <div className="select-wrap cluster-select"><select value={namespace} onChange={(event) => setNamespace(event.target.value)}><option>All namespaces</option><option>default</option><option>production</option><option>kube-system</option></select><ChevronDown size={15} /></div>
-          </label>
-
-          <label className="permission-row">
-            <input type="checkbox" defaultChecked />
-            <span><strong>Read-only access</strong><small>Only workload metadata and resource requests will be inspected.</small></span>
-          </label>
-
-          {notice && <div className="cluster-notice" role="status"><AlertCircle size={16} /><span>{notice}</span></div>}
-          <button className="connect-button" type="submit"><PlugZap size={18} /><span>Connect cluster</span><ArrowRight size={18} /></button>
-        </form>
-
-        <aside className="connection-preview">
-          <div className="preview-header"><span>CONNECTION PREVIEW</span><ServerCog size={18} /></div>
-          <div className="cluster-orbit" aria-hidden="true">
-            <div className="orbit-ring outer" /><div className="orbit-ring inner" />
-            <div className="orbit-core"><Network size={28} /></div>
-            <span className="orbit-node node-one" /><span className="orbit-node node-two" /><span className="orbit-node node-three" />
-          </div>
-          <div className="preview-name"><strong>{connectionName || "Unnamed cluster"}</strong><span>{source === "kubeconfig" ? context : "Manual credentials"}</span></div>
-          <dl className="preview-details">
-            <div><dt>Credential source</dt><dd>{source === "kubeconfig" ? "Kubeconfig" : "Manual"}</dd></div>
-            <div><dt>Namespace scope</dt><dd>{namespace}</dd></div>
-            <div><dt>Access mode</dt><dd>Read only</dd></div>
-          </dl>
-          <div className="security-note"><ShieldCheck size={18} /><div><strong>Local credentials</strong><span>Connection details stay on this device and are never sent to a remote KubeBudget service.</span></div></div>
-        </aside>
+        </div>
       </div>
     </section>
   );
@@ -497,6 +674,16 @@ function Resources({ result }: { result: ManifestResult }) {
         </table>
       </div>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ClusterProvider>
+      <EstimationHistoryProvider>
+        <AppContent />
+      </EstimationHistoryProvider>
+    </ClusterProvider>
   );
 }
 
