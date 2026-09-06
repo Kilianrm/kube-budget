@@ -129,7 +129,23 @@ Use `--instance-type` when the cluster uses a different worker-node type; it def
 kubeestimate deployment.yaml --provider aws --region eu-west-1 --instance-type c6i.large
 ```
 
-The CLI reads CPU, memory, and ephemeral-storage requests from the manifest. It currently supports Deployment manifests and illustrative AWS pricing snapshots for `us-east-1` and `eu-west-1`. The node type is used to derive the cost attributed to those requested resources. Output includes hourly and daily USD estimates; the daily total is the hourly total multiplied by 24. AWS region identifiers use hyphens, so use `eu-west-1` rather than `eu-west1`.
+The CLI reads CPU, memory, and ephemeral-storage requests from the manifest. It currently supports Deployment manifests and illustrative pricing snapshots for AWS (`us-east-1`, `eu-west-1`), Azure (`eastus`, `westeurope`), and GCP (`us-central1`, `europe-west1`). AWS uses EC2 instance types such as `m6i.large`; Azure uses VM sizes such as `Standard_D2s_v5`; GCP uses Compute Engine machine types such as `e2-standard-2`. The selected worker type is used to derive the cost attributed to requested resources. Output includes hourly and daily USD estimates; the daily total is the hourly total multiplied by 24. AWS region identifiers use hyphens, so use `eu-west-1` rather than `eu-west1`.
+
+Estimate a GKE workload with GCP pricing:
+
+```sh
+kubeestimate deployment.yaml --provider gcp --region us-central1 --instance-type e2-standard-2
+```
+
+For a GCP quick estimate, omit the region and machine type to use `us-central1` and `e2-standard-2`.
+
+Estimate an AKS workload with Azure pricing:
+
+```sh
+kubeestimate deployment.yaml --provider azure --region eastus --instance-type Standard_D2s_v5
+```
+
+For an Azure quick estimate, omit the region and machine type to use `eastus` and `Standard_D2s_v5`.
 
 ## Local dashboard
 
@@ -165,13 +181,15 @@ Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work o
 - [x] Implement a CLI plugin support.
 - [x] Implement first Wails adapter for UI
 - [x] Implement first dashboard (only manifest mode, one yaml)
-- [ ] Add cost estimation support for GCP
-- [ ] Add cost estimation support for Azure
-- [ ] Add multi-cloud/provider pricing comparisong using a toogler in cost estimation section.
-- [ ] Store log and show logs of the previous simulations
-- [ ] Add estimation comparison between two yaml.
+- [x] Add cost estimation support for GCP
+- [x] Add cost estimation support for Azure
+- [x] Add multi-cloud/provider pricing comparisong using a toogler in cost estimation section.
+- [x] Store log and show logs of the previous simulations
+- [x] Implement log old estimations.
+- [ ] Implement connection to a real cluster
+- [ ] Design responsabilities of cluster management section...
+
 ...
-- [ ] Start conection to clusters...
 ...
 ...
 ...

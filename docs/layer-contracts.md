@@ -69,7 +69,13 @@ The core receives the normalized `core.Workload` produced by the converter and r
 
 The core does not know whether the data came from a CLI, GitHub, a webhook, or a direct function call.
 
-## 4. Error ownership
+## 4. Pricing provider contract
+
+Pricing providers implement the shared `internal/providers.Provider` contract. Each provider supplies its name, supported regions, machine types, and a `pricing.PriceConfig` for a selected machine type and region.
+
+The provider registry owns provider lookup so entry points do not need provider-specific dispatch logic. Provider packages retain their own catalogs and pricing rules because cloud pricing models may differ.
+
+## 5. Error ownership
 
 - Input delivery owns file, transport, and request-body errors.
 - The converter owns malformed or unsupported manifest errors.
