@@ -1,5 +1,65 @@
 export namespace wails {
 	
+	export class ClusterConnectionRequest {
+	    kubeconfigPath: string;
+	    context: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ClusterConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kubeconfigPath = source["kubeconfigPath"];
+	        this.context = source["context"];
+	    }
+	}
+	export class ClusterConnectionResult {
+	    context: string;
+	    server: string;
+	    version: string;
+	    connectedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ClusterConnectionResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.context = source["context"];
+	        this.server = source["server"];
+	        this.version = source["version"];
+	        this.connectedAt = source["connectedAt"];
+	    }
+	}
+	export class KubeconfigContext {
+	    name: string;
+	    server: string;
+	    cluster: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KubeconfigContext(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.server = source["server"];
+	        this.cluster = source["cluster"];
+	    }
+	}
+	export class KubeconfigContextsRequest {
+	    kubeconfigPath: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KubeconfigContextsRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kubeconfigPath = source["kubeconfigPath"];
+	    }
+	}
 	export class ManifestDocument {
 	    name: string;
 	    content: string;

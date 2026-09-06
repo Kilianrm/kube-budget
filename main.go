@@ -27,6 +27,7 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 245, G: 247, B: 250, A: 1},
 		Bind: []interface{}{
 			manifestwails.NewManifestAdapter(),
+			manifestwails.NewClusterAdapter(),
 		},
 	})
 	if err != nil {
