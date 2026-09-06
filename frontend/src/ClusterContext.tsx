@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from "react";
+import { testClusterConnection } from "./backend";
 
 export interface ClusterConnection {
   name: string;
@@ -9,13 +10,16 @@ export interface ClusterConnection {
   namespace: string;
   readOnly: boolean;
   connectedAt: number;
+  server?: string;
+  version?: string;
 }
 
 interface ClusterContextType {
   clusterConnection: ClusterConnection | null;
   isConnecting: boolean;
   connectionError: string | null;
-  connect: (connection: ClusterConnection) => Promise<void>;
+  connect: (connection: ClusterConnection) => Promise<ClusterConnection>;
+  confirmConnection: (connection: ClusterConnection) => void;
   disconnect: () => void;
   isConnected: () => boolean;
 }
@@ -40,17 +44,16 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     setIsConnecting(true);
     setConnectionError(null);
     try {
-      // In a real implementation, you would validate the connection here
-      // For now, we'll simulate a successful connection after a short delay
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      const result = await testClusterConnection(connection.kubeconfigPath ?? "", connection.context ?? "");
 
       const connectedCluster: ClusterConnection = {
         ...connection,
-        connectedAt: Date.now(),
+        connectedAt: result.connectedAt,
+        server: result.server,
+        version: result.version,
       };
 
-      setClusterConnection(connectedCluster);
-      localStorage.setItem("cluster-connection", JSON.stringify(connectedCluster));
+      return connectedCluster;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to connect to cluster";
       setConnectionError(message);
@@ -58,6 +61,12 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsConnecting(false);
     }
+  }, []);
+
+  const confirmConnection = useCallback((connection: ClusterConnection) => {
+    setClusterConnection(connection);
+    localStorage.setItem("cluster-connection", JSON.stringify(connection));
+    setConnectionError(null);
   }, []);
 
   const disconnect = useCallback(() => {
@@ -77,6 +86,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
         isConnecting,
         connectionError,
         connect,
+        confirmConnection,
         disconnect,
         isConnected,
       }}
