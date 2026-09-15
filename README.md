@@ -186,16 +186,25 @@ Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work o
 - [x] Add multi-cloud/provider pricing comparisong using a toogler in cost estimation section.
 - [x] Store log and show logs of the previous simulations
 - [x] Implement log old estimations.
-- [ ] Implement connection to a real cluster
-- [ ] Design responsabilities of cluster management section...
+- [x] Implement connection to a real cluster
+- [x] First responsabilities of cluster management approach...
+- [ ] Enhance Overview cluster section.
+- [ ] Enhance Workloads cluster section.
+- [ ] Enhance Namespaces cluster section.
+- [ ] Enhance resource cluster section.
+- [ ] Enhance Nodes cluster section.
+...
+- [ ] Add support for EKS ( AWS Elastic Kubernetes Service )
+- [ ] Add optimization module
+- [ ] Add cost explorer cluster mode.
+- [ ] Add enhanced estimation in manifest mode when cluster is linked.
+...
+...
 
-...
-...
-...
-...
-- [ ] Add a GitHub Action that compares cost deltas in PRs
 - [ ] Add Kubernetes admission webhook support
 - [ ] Improve pricing accuracy and configuration
+- [ ] Add support for GKE ( Google Kubernetes Engine)
+- [ ] Add support for AKS (Azure Kubernetes Service)
 - [ ] Add more workload types and resource coverage
 - [ ] Add support to be used in kubectl.
 - [ ] Add a GitHub Action that compares cost deltas in PRs
