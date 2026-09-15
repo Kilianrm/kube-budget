@@ -38,7 +38,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
   const [kubeconfigPath, setKubeconfigPath] = useState("~/.kube/config");
   const [context, setContext] = useState("");
   const [contexts, setContexts] = useState<Array<{ name: string; server: string }>>([]);
-  const [namespace, setNamespace] = useState("default");
+  const [namespace, setNamespace] = useState("All namespaces");
   const [readOnly, setReadOnly] = useState(true);
   const [notice, setNotice] = useState("");
   const [noticeKind, setNoticeKind] = useState<"info" | "success" | "error">("info");

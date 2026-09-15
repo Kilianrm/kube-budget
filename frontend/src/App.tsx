@@ -1,14 +1,18 @@
 import {
   AlertCircle,
+  Activity,
   ArrowRight,
   Boxes,
   Check,
   ChevronDown,
   CircleDollarSign,
+  Cpu,
   Clock,
+  Database,
   Cloud,
   Code2,
   FileCode2,
+  HardDrive,
   Gauge,
   KeyRound,
   Layers3,
@@ -16,16 +20,17 @@ import {
   LoaderCircle,
   Network,
   PlugZap,
+  RefreshCw,
   RotateCcw,
+  Search,
   ServerCog,
-  ShieldCheck,
   SlidersHorizontal,
   UploadCloud,
   X,
   Zap,
 } from "lucide-react";
-import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
-import { estimateManifest, ManifestResult } from "./backend";
+import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { estimateManifest, getClusterSnapshot, ClusterSnapshot, ManifestResult } from "./backend";
 import { ClusterProvider, useCluster } from "./ClusterContext";
 import { ConnectionModal } from "./ConnectionModal";
 import { EstimationHistoryProvider, useEstimationHistory, SavedEstimation } from "./EstimationHistory";
@@ -73,6 +78,7 @@ const providerCatalog: Record<Provider, Record<string, string[]>> = {
 
 type ResultTab = "overview" | "resources" | "source";
 type AppSection = "estimate" | "cluster" | "optimization";
+type ClusterView = "overview" | "workloads" | "resources" | "cost" | "namespaces" | "nodes";
 
 function formatMoney(value: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", {
@@ -276,8 +282,7 @@ function AppContent() {
           <button type="button" className={estimateView === "estimator" ? "active" : ""} onClick={() => setEstimateView("estimator")}><Gauge size={17} /><span>Estimator</span></button>
           <button type="button" className={estimateView === "registry" ? "active" : ""} onClick={() => setEstimateView("registry")}><Clock size={17} /><span>Saved estimates</span></button>
         </aside>}
-        {activeSection === "cluster" && isConnected() && <ClusterManagementPanel />}
-        <div className="app-main">
+        <div className={`app-main ${activeSection === "cluster" ? "cluster-app-main" : ""}`}>
       {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "optimization" ? <OptimizationPanel /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace ${result ? "has-result" : "manifest-stage"}`}>
         <aside className="input-pane">
           <div className="pane-heading">
@@ -513,21 +518,38 @@ function ClusterLockedState({ onConnectClick }: { onConnectClick: () => void }) 
   );
 }
 
-function ClusterManagementPanel() {
-  return (
-    <aside className="cluster-sidebar" aria-label="Cluster management options">
-      <span className="sidebar-label">CLUSTER</span>
-      <div className="sidebar-placeholder">
-        <Lightbulb size={18} />
-        <p>Management options coming soon</p>
-      </div>
-    </aside>
-  );
-}
-
 function ClusterConnection() {
   const { isConnected, clusterConnection } = useCluster();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeView, setActiveView] = useState<ClusterView>("overview");
+  const [snapshot, setSnapshot] = useState<ClusterSnapshot | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [snapshotError, setSnapshotError] = useState("");
+
+  const refreshSnapshot = useCallback(async () => {
+    if (!clusterConnection?.context) {
+      setSnapshotError("The connected cluster does not have a kubeconfig context.");
+      return;
+    }
+    setIsRefreshing(true);
+    setSnapshotError("");
+    try {
+      const nextSnapshot = await getClusterSnapshot(
+        clusterConnection.kubeconfigPath ?? "",
+        clusterConnection.context,
+        clusterConnection.namespace,
+      );
+      setSnapshot(nextSnapshot);
+    } catch (reason) {
+      setSnapshotError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [clusterConnection?.context, clusterConnection?.kubeconfigPath, clusterConnection?.namespace]);
+
+  useEffect(() => {
+    if (isConnected()) void refreshSnapshot();
+  }, [isConnected, refreshSnapshot]);
 
   if (!isConnected()) {
     return (
@@ -540,44 +562,170 @@ function ClusterConnection() {
 
   return (
     <>
+      <aside className="cluster-sidebar" aria-label="Cluster management options">
+        <span className="sidebar-label">CLUSTER</span>
+        <ClusterNavButton view="overview" activeView={activeView} onSelect={setActiveView} icon={<Activity size={16} />} label="Overview" />
+        <ClusterNavButton view="workloads" activeView={activeView} onSelect={setActiveView} icon={<Boxes size={16} />} label="Workloads" />
+        <ClusterNavButton view="resources" activeView={activeView} onSelect={setActiveView} icon={<Database size={16} />} label="Resources" />
+        <ClusterNavButton view="namespaces" activeView={activeView} onSelect={setActiveView} icon={<Layers3 size={16} />} label="Namespaces" />
+        <ClusterNavButton view="nodes" activeView={activeView} onSelect={setActiveView} icon={<ServerCog size={16} />} label="Nodes" />
+        <ClusterNavButton view="cost" activeView={activeView} onSelect={setActiveView} icon={<CircleDollarSign size={16} />} label="Cost explorer" />
+        <div className="cluster-sidebar-spacer" />
+      </aside>
       <section className="cluster-management-view">
-        <div className="management-header">
-          <div>
-            <span className="step-label">CLUSTER</span>
-            <h1>{clusterConnection?.name || "Connected Cluster"}</h1>
-            <p>Manage and monitor your connected Kubernetes cluster</p>
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            onClick={() => setIsModalOpen(true)}
-            title="Edit cluster connection"
-            aria-label="Edit cluster connection"
-          >
-            <Gauge size={17} />
-          </button>
-        </div>
-
-        <div className="empty-state">
-          <div className="empty-visual" aria-hidden="true">
-            <div className="visual-node visual-main"><Network size={27} /></div>
-            <div className="visual-node visual-one"><Boxes size={18} /></div>
-            <div className="visual-node visual-two"><Layers3 size={18} /></div>
-            <div className="visual-node visual-three"><ServerCog size={18} /></div>
-            <span className="connector connector-one" /><span className="connector connector-two" /><span className="connector connector-three" />
-          </div>
-          <h3>Cluster features coming soon</h3>
-          <p>Additional cluster management features will be available in future releases. For now, you can use this cluster for accurate cost estimation in the Manifest section.</p>
-          <div className="empty-capabilities">
-            <span><Check size={14} /> Live workload inspection</span>
-            <span><Check size={14} /> Real-time metrics</span>
-            <span><Check size={14} /> Cluster insights</span>
-          </div>
-        </div>
+        <ClusterScreenHeader view={activeView} snapshot={snapshot} isRefreshing={isRefreshing} onRefresh={refreshSnapshot} />
+        {snapshotError && <div className="error-message"><AlertCircle size={16} /><span>{snapshotError}</span></div>}
+        {!snapshot && isRefreshing && <div className="cluster-screen-content"><section className="cluster-panel"><div className="panel-footnote"><LoaderCircle className="spin" size={15} /> Collecting live cluster resources...</div></section></div>}
+        {snapshot && snapshot.warnings.length > 0 && <div className="cluster-screen-content"><div className="error-message"><AlertCircle size={16} /><span>{snapshot.warnings.map((warning) => warning.message).join(" ")}</span></div></div>}
+        {snapshot && activeView === "overview" && <ClusterOverview snapshot={snapshot} onNavigate={setActiveView} />}
+        {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} onRefresh={refreshSnapshot} isRefreshing={isRefreshing} />}
+        {snapshot && activeView === "resources" && <ClusterResources snapshot={snapshot} />}
+        {snapshot && activeView === "cost" && <ClusterCostExplorer snapshot={snapshot} />}
+        {snapshot && activeView === "namespaces" && <ClusterNamespaces snapshot={snapshot} />}
+        {snapshot && activeView === "nodes" && <ClusterNodes snapshot={snapshot} />}
       </section>
       <ConnectionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
     </>
   );
+}
+
+function ClusterNavButton({ view, activeView, onSelect, icon, label }: { view: ClusterView; activeView: ClusterView; onSelect: (view: ClusterView) => void; icon: React.ReactNode; label: string }) {
+  return <button type="button" className={activeView === view ? "active" : ""} onClick={() => onSelect(view)}>{icon}<span>{label}</span></button>;
+}
+
+const clusterViewTitles: Record<ClusterView, { title: string; description: string }> = {
+  overview: { title: "Cluster overview", description: "A high-level view of health, capacity, and requested cost." },
+  workloads: { title: "Workloads", description: "Inspect the workloads that make up this cluster's requested capacity." },
+  resources: { title: "Resources", description: "Inspect batch, networking, storage, configuration, and policy resources." },
+  cost: { title: "Cost explorer", description: "Understand where requested monthly cost is concentrated." },
+  namespaces: { title: "Namespaces", description: "Compare workload count and requested cost across namespaces." },
+  nodes: { title: "Nodes", description: "Review node readiness and the capacity available to workloads." },
+};
+
+function ClusterScreenHeader({ view, snapshot, isRefreshing, onRefresh }: { view: ClusterView; snapshot: ClusterSnapshot | null; isRefreshing: boolean; onRefresh: () => void }) {
+  const details = clusterViewTitles[view];
+  return <div className="management-header">
+    <div><span className="step-label">CLUSTER / {view.toUpperCase()}</span><h1>{details.title}</h1><p>{details.description}</p></div>
+    <div className="management-actions">
+      <span className="cluster-data-badge"><span /> {snapshot ? `Live � ${new Date(snapshot.collectedAt).toLocaleTimeString()}` : "Waiting for data"}</span>
+      <button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh cluster snapshot" aria-label="Refresh cluster snapshot"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button>
+    </div>
+  </div>;
+}
+
+function DemoMetric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "good" | "warning" }) {
+  return <div className={`cluster-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
+}
+
+function ClusterOverview({ snapshot, onNavigate }: { snapshot: ClusterSnapshot; onNavigate: (view: ClusterView) => void }) {
+  const { summary } = snapshot;
+  const scheduledRequests = snapshot.nodes.reduce((total, node) => addResourceValues(total, node.requests), emptyResourceValues());
+  const unhealthyWorkloads = snapshot.workloads.filter((workload) => workload.readyReplicas < workload.desiredReplicas).length;
+  const health = summary.nodeCount > 0 && summary.readyNodeCount === summary.nodeCount ? "Healthy" : "Attention";
+  return <div className="cluster-screen-content">
+    <div className="cluster-metrics"><DemoMetric label="Cluster health" value={health} detail={`${summary.readyNodeCount} of ${summary.nodeCount} nodes ready`} tone={health === "Healthy" ? "good" : "warning"} /><DemoMetric label="Nodes" value={`${summary.readyNodeCount} / ${summary.nodeCount}`} detail="Ready nodes" tone={summary.readyNodeCount === summary.nodeCount ? "good" : "warning"} /><DemoMetric label="Workloads" value={String(summary.workloadCount)} detail={`Across ${summary.namespaceCount} namespaces`} /><DemoMetric label="Other resources" value={String(summary.resourceCount)} detail="Batch, config, network, storage, policy" /></div>
+    <div className="cluster-grid-two">
+      <section className="cluster-panel"><PanelHeading title="Scheduled requests" action="View nodes" onAction={() => onNavigate("nodes")} /><div className="capacity-list"><CapacityRow label="CPU requests" value={resourcePercent(scheduledRequests.cpuMilli, summary.allocatable.cpuMilli)} color="blue" /><CapacityRow label="Memory requests" value={resourcePercent(scheduledRequests.memoryBytes, summary.allocatable.memoryBytes)} color="green" /><CapacityRow label="Storage requests" value={resourcePercent(scheduledRequests.storageBytes, summary.allocatable.storageBytes)} color="orange" /></div><div className="panel-footnote"><Activity size={14} /> Requested resources only. This is not observed utilization.</div></section>
+      <section className="cluster-panel"><PanelHeading title="Attention needed" action="View workloads" onAction={() => onNavigate("workloads")} /><div className="attention-list"><AttentionRow icon={<AlertCircle size={16} />} title={`${summary.missingRequestWorkloads} workloads have incomplete requests`} detail="CPU or memory request is missing" tone={summary.missingRequestWorkloads > 0 ? "warning" : "good"} /><AttentionRow icon={unhealthyWorkloads > 0 ? <AlertCircle size={16} /> : <Check size={16} />} title={unhealthyWorkloads > 0 ? `${unhealthyWorkloads} workloads are not fully ready` : "All discovered workloads are ready"} detail="Compared with desired replicas" tone={unhealthyWorkloads > 0 ? "warning" : "good"} /><AttentionRow icon={<RefreshCw size={16} />} title="Live snapshot collected" detail={new Date(snapshot.collectedAt).toLocaleString()} tone="neutral" /></div></section>
+    </div>
+    <section className="cluster-panel"><PanelHeading title="CPU requests by namespace" action="View namespaces" onAction={() => onNavigate("namespaces")} /><NamespaceBars snapshot={snapshot} /></section>
+  </div>;
+}
+
+function CapacityRow({ label, value, color }: { label: string; value: string; color: string }) {
+  return <div className="capacity-row"><div><span>{label}</span><strong>{value}</strong></div><div className="capacity-track"><span className={color} style={{ width: value }} /></div></div>;
+}
+
+function AttentionRow({ icon, title, detail, tone }: { icon: React.ReactNode; title: string; detail: string; tone: string }) {
+  return <div className={`attention-row ${tone}`}><span className="attention-icon">{icon}</span><div><strong>{title}</strong><small>{detail}</small></div></div>;
+}
+
+function PanelHeading({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
+  return <div className="cluster-panel-heading"><h2>{title}</h2>{action && <button type="button" onClick={onAction}>{action}<ArrowRight size={14} /></button>}</div>;
+}
+
+function NamespaceBars({ snapshot }: { snapshot: ClusterSnapshot }) {
+  const namespaces = [...snapshot.namespaces].sort((left, right) => right.requests.cpuMilli - left.requests.cpuMilli).slice(0, 6);
+  const largest = namespaces[0]?.requests.cpuMilli ?? 0;
+  return <div className="namespace-bars">{namespaces.map((namespace) => <div className="namespace-bar" key={namespace.name}><div><span>{namespace.name}</span><strong>{formatCPU(namespace.requests.cpuMilli)}<small> requested</small></strong></div><div className="capacity-track"><span style={{ width: largest > 0 ? `${Math.round(namespace.requests.cpuMilli / largest * 100)}%` : "0%" }} /></div></div>)}</div>;
+}
+
+function ClusterWorkloads({ snapshot, onRefresh, isRefreshing }: { snapshot: ClusterSnapshot; onRefresh: () => void; isRefreshing: boolean }) {
+  return <div className="cluster-screen-content"><div className="table-toolbar"><div className="fake-search"><Search size={15} /><span>{snapshot.workloads.length} workloads in scope</span></div><button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh workloads"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button></div><section className="cluster-panel table-panel"><div className="table-summary"><span>{snapshot.workloads.length} workloads discovered</span><span>Declared resource requests</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Workload</th><th>Kind</th><th>Namespace</th><th>Ready</th><th>Requests</th></tr></thead><tbody>{snapshot.workloads.map((workload) => <tr key={workload.uid || `${workload.kind}/${workload.namespace}/${workload.name}`}><td><strong>{workload.name}</strong><small>{workload.missingRequests ? "CPU or memory request missing" : `${workload.containers.length} containers collected`}</small></td><td>{workload.kind}</td><td><span className="namespace-tag">{workload.namespace}</span></td><td><span className={workload.readyReplicas >= workload.desiredReplicas ? "status-good" : "status-warning"}>{workload.readyReplicas >= workload.desiredReplicas ? <Check size={13} /> : <AlertCircle size={13} />} {workload.readyReplicas} / {workload.desiredReplicas}</span></td><td className="cost-cell">{formatCPU(workload.requests.cpuMilli)} � {formatBytes(workload.requests.memoryBytes)}</td></tr>)}</tbody></table></div></section></div>;
+}
+
+function ClusterResources({ snapshot }: { snapshot: ClusterSnapshot }) {
+  const categoryCounts = snapshot.resources.reduce<Record<string, number>>((counts, resource) => {
+    counts[resource.category] = (counts[resource.category] ?? 0) + 1;
+    return counts;
+  }, {});
+  const failedBatch = snapshot.resources.filter((resource) => resource.category === "Batch" && resource.status === "Failed").length;
+  return <div className="cluster-screen-content">
+    <div className="cluster-metrics">
+      <DemoMetric label="Resources" value={String(snapshot.resources.length)} detail="Supporting objects in scope" />
+      <DemoMetric label="Batch" value={String(categoryCounts.Batch ?? 0)} detail="Jobs and CronJobs" tone={failedBatch > 0 ? "warning" : "good"} />
+      <DemoMetric label="Configuration" value={String(categoryCounts.Configuration ?? 0)} detail="ConfigMaps and Secrets" />
+      <DemoMetric label="Infrastructure" value={String((categoryCounts.Networking ?? 0) + (categoryCounts.Storage ?? 0) + (categoryCounts.Policy ?? 0))} detail="Network, storage, and policy" />
+    </div>
+    <section className="cluster-panel table-panel">
+      <div className="table-summary"><span>{snapshot.resources.length} supporting resources discovered</span><span>Secret values are never collected</span></div>
+      <div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Resource</th><th>Kind</th><th>Category</th><th>Namespace</th><th>Status</th><th>Details</th></tr></thead><tbody>
+        {snapshot.resources.map((resource) => <tr key={resource.uid || `${resource.kind}/${resource.namespace}/${resource.name}`}>
+          <td><strong>{resource.name}</strong><small>{resource.requests.cpuMilli > 0 || resource.requests.memoryBytes > 0 ? `${formatCPU(resource.requests.cpuMilli)} � ${formatBytes(resource.requests.memoryBytes)}` : "Metadata only"}</small></td>
+          <td>{resource.kind}</td>
+          <td><span className="namespace-tag">{resource.category}</span></td>
+          <td>{resource.namespace || "Cluster"}</td>
+          <td><span className={resource.status === "Failed" ? "status-warning" : "status-good"}>{resource.status === "Failed" ? <AlertCircle size={13} /> : <Check size={13} />} {resource.status}</span></td>
+          <td><small>{formatResourceAttributes(resource.attributes)}</small></td>
+        </tr>)}
+      </tbody></table></div>
+    </section>
+  </div>;
+}
+
+function ClusterCostExplorer({ snapshot }: { snapshot: ClusterSnapshot }) {
+  return <div className="cluster-screen-content"><div className="cluster-metrics"><DemoMetric label="Requested monthly cost" value="Unavailable" detail="Pricing is not configured" /><DemoMetric label="CPU requested" value={formatCPU(snapshot.summary.requests.cpuMilli)} detail={`Across ${snapshot.summary.workloadCount} workloads`} /><DemoMetric label="Memory requested" value={formatBytes(snapshot.summary.requests.memoryBytes)} detail="Declared workload requests" /><DemoMetric label="Incomplete requests" value={String(snapshot.summary.missingRequestWorkloads)} detail="Require review before pricing" tone={snapshot.summary.missingRequestWorkloads > 0 ? "warning" : "good"} /></div><section className="cluster-panel"><PanelHeading title="Pricing not configured" /><div className="panel-footnote"><CircleDollarSign size={14} /> Live resources are collected. A pricing selection must be added before requested costs can be calculated.</div></section><section className="cluster-panel"><PanelHeading title="CPU requests by namespace" /><NamespaceBars snapshot={snapshot} /></section></div>;
+}
+
+function CostLine({ icon, label, value, width }: { icon: React.ReactNode; label: string; value: string; width: string }) {
+  return <div className="cost-line"><div><span className="cost-line-icon">{icon}</span><span>{label}</span><strong>{value}</strong></div><div className="capacity-track"><span style={{ width }} /></div></div>;
+}
+
+function ClusterNamespaces({ snapshot }: { snapshot: ClusterSnapshot }) {
+  return <div className="cluster-screen-content"><section className="cluster-panel table-panel"><div className="table-summary"><span>{snapshot.namespaces.length} namespaces in scope</span><span>Live workload inventory</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Namespace</th><th>Workloads</th><th>Pods</th><th>CPU requests</th><th>Memory requests</th></tr></thead><tbody>{snapshot.namespaces.map((namespace) => <tr key={namespace.name}><td><strong>{namespace.name}</strong><small>{namespace.missingRequests > 0 ? `${namespace.missingRequests} incomplete workloads` : "Resource requests available"}</small></td><td>{namespace.workloadCount}</td><td>{namespace.podCount}</td><td>{formatCPU(namespace.requests.cpuMilli)}</td><td className="cost-cell">{formatBytes(namespace.requests.memoryBytes)}</td></tr>)}</tbody></table></div></section></div>;
+}
+
+function ClusterNodes({ snapshot }: { snapshot: ClusterSnapshot }) {
+  const instanceTypes = new Set(snapshot.nodes.map((node) => node.instanceType).filter(Boolean));
+  const scheduledRequests = snapshot.nodes.reduce((total, node) => addResourceValues(total, node.requests), emptyResourceValues());
+  return <div className="cluster-screen-content"><div className="cluster-metrics"><DemoMetric label="Ready nodes" value={`${snapshot.summary.readyNodeCount} / ${snapshot.summary.nodeCount}`} detail={snapshot.summary.readyNodeCount === snapshot.summary.nodeCount ? "No unavailable nodes" : "Some nodes need attention"} tone={snapshot.summary.readyNodeCount === snapshot.summary.nodeCount ? "good" : "warning"} /><DemoMetric label="CPU allocatable" value={formatCPU(snapshot.summary.allocatable.cpuMilli)} detail={`${resourcePercent(scheduledRequests.cpuMilli, snapshot.summary.allocatable.cpuMilli)} requested`} /><DemoMetric label="Memory allocatable" value={formatBytes(snapshot.summary.allocatable.memoryBytes)} detail={`${resourcePercent(scheduledRequests.memoryBytes, snapshot.summary.allocatable.memoryBytes)} requested`} /><DemoMetric label="Instance types" value={String(instanceTypes.size)} detail={Array.from(instanceTypes).slice(0, 2).join(", ") || "Not reported"} /></div><section className="cluster-panel table-panel"><div className="table-summary"><span>Node capacity</span><span>Read-only inventory</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Node</th><th>Status</th><th>Role</th><th>CPU</th><th>Memory</th></tr></thead><tbody>{snapshot.nodes.map((node) => <tr key={node.uid || node.name}><td><strong>{node.name}</strong><small>{node.zone || node.instanceType || "Zone not reported"}</small></td><td><span className={node.ready ? "status-good" : "status-warning"}>{node.ready ? <Check size={13} /> : <AlertCircle size={13} />} {node.ready ? "Ready" : "Not ready"}</span></td><td>{node.role}</td><td>{resourcePercent(node.requests.cpuMilli, node.allocatable.cpuMilli)} requested</td><td>{resourcePercent(node.requests.memoryBytes, node.allocatable.memoryBytes)} requested</td></tr>)}</tbody></table></div></section></div>;
+}
+
+function emptyResourceValues() {
+  return { cpuMilli: 0, memoryBytes: 0, storageBytes: 0, gpuUnits: 0 };
+}
+
+function addResourceValues(left: ReturnType<typeof emptyResourceValues>, right: ReturnType<typeof emptyResourceValues>) {
+  return { cpuMilli: left.cpuMilli + right.cpuMilli, memoryBytes: left.memoryBytes + right.memoryBytes, storageBytes: left.storageBytes + right.storageBytes, gpuUnits: left.gpuUnits + right.gpuUnits };
+}
+
+function resourcePercent(requested: number, allocatable: number) {
+  return allocatable > 0 ? `${Math.round(requested / allocatable * 100)}%` : "N/A";
+}
+
+function formatCPU(cpuMilli: number) {
+  return cpuMilli >= 1000 ? `${(cpuMilli / 1000).toFixed(cpuMilli % 1000 === 0 ? 0 : 1)} cores` : `${cpuMilli}m`;
+}
+
+function formatBytes(bytes: number) {
+  if (bytes === 0) return "0 GiB";
+  const gibibytes = bytes / (1024 ** 3);
+  return gibibytes >= 1 ? `${gibibytes.toFixed(gibibytes >= 10 ? 0 : 1)} GiB` : `${Math.round(bytes / (1024 ** 2))} MiB`;
+}
+
+function formatResourceAttributes(attributes: Record<string, string>) {
+  const entries = Object.entries(attributes ?? {});
+  return entries.length > 0 ? entries.map(([name, value]) => `${name}: ${value}`).join(" � ") : "No additional details";
 }
 
 function OptimizationPanel() {
