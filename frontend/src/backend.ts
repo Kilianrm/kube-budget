@@ -1,9 +1,10 @@
 import { EstimateManifest } from "../wailsjs/go/wails/ManifestAdapter";
 import {
+  GetClusterSnapshot,
   ListKubeconfigContexts,
   TestConnection,
 } from "../wailsjs/go/wails/ClusterAdapter";
-import { wails } from "../wailsjs/go/models";
+import { cluster, wails } from "../wailsjs/go/models";
 
 export interface ManifestRequest {
   documents: Array<{
@@ -24,6 +25,7 @@ export interface ManifestRequest {
 export type ManifestResult = wails.ManifestResult;
 export type ClusterContext = wails.KubeconfigContext;
 export type ClusterConnectionResult = wails.ClusterConnectionResult;
+export type ClusterSnapshot = cluster.Snapshot;
 
 declare global {
   interface Window {
@@ -61,4 +63,16 @@ export async function testClusterConnection(
   }
 
   return TestConnection(new wails.ClusterConnectionRequest({ kubeconfigPath, context }));
+}
+
+export async function getClusterSnapshot(
+  kubeconfigPath: string,
+  context: string,
+  namespace: string,
+): Promise<ClusterSnapshot> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return GetClusterSnapshot(new wails.ClusterSnapshotRequest({ kubeconfigPath, context, namespace }));
 }

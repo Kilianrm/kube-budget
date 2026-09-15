@@ -1,6 +1,7 @@
 package wails
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -8,12 +9,20 @@ import (
 	"strings"
 	"time"
 
+	kubernetesadapter "kube-budget/internal/adapters/kubernetes"
+	clustermode "kube-budget/internal/application/cluster"
+
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
-const clusterConnectionTimeout = 10 * time.Second
+const (
+	clusterConnectionTimeout = 10 * time.Second
+	clusterCollectionTimeout = 30 * time.Second
+)
 
 // ClusterAdapter exposes kubeconfig-backed cluster operations to the dashboard.
 type ClusterAdapter struct{}
@@ -38,6 +47,12 @@ type ClusterConnectionResult struct {
 	Server      string `json:"server"`
 	Version     string `json:"version"`
 	ConnectedAt int64  `json:"connectedAt"`
+}
+
+type ClusterSnapshotRequest struct {
+	KubeconfigPath string `json:"kubeconfigPath"`
+	Context        string `json:"context"`
+	Namespace      string `json:"namespace"`
 }
 
 func NewClusterAdapter() *ClusterAdapter {
@@ -66,15 +81,10 @@ func (adapter *ClusterAdapter) TestConnection(request ClusterConnectionRequest) 
 		return ClusterConnectionResult{}, fmt.Errorf("cluster connection: context is required")
 	}
 
-	config, err := loadKubeconfig(request.KubeconfigPath, request.Context)
+	clientConfig, err := buildClientConfig(request.KubeconfigPath, request.Context)
 	if err != nil {
 		return ClusterConnectionResult{}, err
 	}
-	clientConfig, err := clientcmd.NewDefaultClientConfig(*config, &clientcmd.ConfigOverrides{CurrentContext: request.Context}).ClientConfig()
-	if err != nil {
-		return ClusterConnectionResult{}, fmt.Errorf("cluster connection: build client config: %w", err)
-	}
-	clientConfig.Timeout = clusterConnectionTimeout
 
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(clientConfig)
 	if err != nil {
@@ -91,6 +101,60 @@ func (adapter *ClusterAdapter) TestConnection(request ClusterConnectionRequest) 
 		Version:     version.GitVersion,
 		ConnectedAt: time.Now().UnixMilli(),
 	}, nil
+}
+
+func (adapter *ClusterAdapter) GetClusterSnapshot(request ClusterSnapshotRequest) (clustermode.Snapshot, error) {
+	if strings.TrimSpace(request.Context) == "" {
+		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: context is required")
+	}
+
+	clientConfig, err := buildClientConfig(request.KubeconfigPath, request.Context)
+	if err != nil {
+		return clustermode.Snapshot{}, err
+	}
+	client, err := kubernetes.NewForConfig(clientConfig)
+	if err != nil {
+		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: create Kubernetes client: %w", err)
+	}
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(clientConfig)
+	if err != nil {
+		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: create discovery client: %w", err)
+	}
+	version, err := discoveryClient.ServerVersion()
+	if err != nil {
+		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: discover server version: %w", err)
+	}
+
+	namespace := strings.TrimSpace(request.Namespace)
+	if strings.EqualFold(namespace, "all namespaces") {
+		namespace = ""
+	}
+	collector := kubernetesadapter.NewCollector(client, clustermode.ClusterInfo{
+		Context: request.Context,
+		Server:  redactServerURL(clientConfig.Host),
+		Version: version.GitVersion,
+	}, namespace)
+	ctx, cancel := context.WithTimeout(context.Background(), clusterCollectionTimeout)
+	defer cancel()
+
+	snapshot, err := clustermode.New(collector).Snapshot(ctx)
+	if err != nil {
+		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: collect resources: %w", err)
+	}
+	return snapshot, nil
+}
+
+func buildClientConfig(path, contextName string) (*rest.Config, error) {
+	config, err := loadKubeconfig(path, contextName)
+	if err != nil {
+		return nil, err
+	}
+	clientConfig, err := clientcmd.NewDefaultClientConfig(*config, &clientcmd.ConfigOverrides{CurrentContext: contextName}).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("cluster connection: build client config: %w", err)
+	}
+	clientConfig.Timeout = clusterConnectionTimeout
+	return clientConfig, nil
 }
 
 func loadKubeconfig(path string, contextName string) (*clientcmdapi.Config, error) {
