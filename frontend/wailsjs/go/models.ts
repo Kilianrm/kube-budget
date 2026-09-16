@@ -108,6 +108,7 @@ export namespace cluster {
 	    uid: string;
 	    name: string;
 	    ready: boolean;
+	    schedulable: boolean;
 	    role: string;
 	    zone: string;
 	    region: string;
@@ -126,6 +127,7 @@ export namespace cluster {
 	        this.uid = source["uid"];
 	        this.name = source["name"];
 	        this.ready = source["ready"];
+	        this.schedulable = source["schedulable"];
 	        this.role = source["role"];
 	        this.zone = source["zone"];
 	        this.region = source["region"];

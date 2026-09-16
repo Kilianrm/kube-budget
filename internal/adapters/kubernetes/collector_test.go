@@ -52,7 +52,7 @@ func TestCollectBuildsLiveInventory(t *testing.T) {
 	if len(data.Warnings) != 0 {
 		t.Fatalf("Collect() warnings = %#v, want none", data.Warnings)
 	}
-	if len(data.Nodes) != 1 || !data.Nodes[0].Ready || data.Nodes[0].Requests.CPUMilli != 500 {
+	if len(data.Nodes) != 1 || !data.Nodes[0].Ready || !data.Nodes[0].Schedulable || data.Nodes[0].Requests.CPUMilli != 500 {
 		t.Errorf("Collect() nodes = %#v", data.Nodes)
 	}
 	if data.NamespacePodCounts["production"] != 1 {
@@ -67,6 +67,24 @@ func TestCollectBuildsLiveInventory(t *testing.T) {
 	}
 	if workload.Requests.CPUMilli != 1500 || workload.Requests.MemoryBytes != 3*(512<<20) || workload.MissingRequests {
 		t.Errorf("Collect() workload requests = %#v", workload)
+	}
+}
+
+func TestCollectMarksCordonedNodeUnschedulable(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
+		Spec:       corev1.NodeSpec{Unschedulable: true},
+		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{
+			Type: corev1.NodeReady, Status: corev1.ConditionTrue,
+		}}},
+	}
+
+	data, err := NewCollector(fake.NewSimpleClientset(node), clustermode.ClusterInfo{}, "").Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if len(data.Nodes) != 1 || !data.Nodes[0].Ready || data.Nodes[0].Schedulable {
+		t.Errorf("Collect() cordoned node = %#v, want Ready and not Schedulable", data.Nodes)
 	}
 }
 

@@ -292,6 +292,7 @@ func collectNodes(nodes []corev1.Node, pods []corev1.Pod) []clustermode.Node {
 			UID:          string(node.UID),
 			Name:         node.Name,
 			Ready:        nodeReady(node),
+			Schedulable:  !node.Spec.Unschedulable,
 			Role:         nodeRole(node.Labels),
 			Zone:         node.Labels[corev1.LabelTopologyZone],
 			Region:       node.Labels[corev1.LabelTopologyRegion],

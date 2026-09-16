@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type ResourceValues struct {
 	CPUMilli     int64 `json:"cpuMilli"`
@@ -54,6 +54,7 @@ type Node struct {
 	UID          string         `json:"uid"`
 	Name         string         `json:"name"`
 	Ready        bool           `json:"ready"`
+	Schedulable  bool           `json:"schedulable"`
 	Role         string         `json:"role"`
 	Zone         string         `json:"zone"`
 	Region       string         `json:"region"`
