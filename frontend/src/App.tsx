@@ -79,6 +79,7 @@ const providerCatalog: Record<Provider, Record<string, string[]>> = {
 type ResultTab = "overview" | "resources" | "source";
 type AppSection = "estimate" | "cluster" | "optimization";
 type ClusterView = "overview" | "workloads" | "resources" | "cost" | "namespaces" | "nodes";
+type WorkloadFilter = "all" | "incomplete" | "incomplete-application" | "incomplete-system";
 
 function formatMoney(value: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", {
@@ -522,6 +523,7 @@ function ClusterConnection() {
   const { isConnected, clusterConnection } = useCluster();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeView, setActiveView] = useState<ClusterView>("overview");
+  const [workloadFilter, setWorkloadFilter] = useState<WorkloadFilter>("all");
   const [snapshot, setSnapshot] = useState<ClusterSnapshot | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [snapshotError, setSnapshotError] = useState("");
@@ -591,8 +593,8 @@ function ClusterConnection() {
         {snapshotError && <div className="error-message"><AlertCircle size={16} /><span>{snapshotError}</span></div>}
         {!snapshot && isRefreshing && <div className="cluster-screen-content"><section className="cluster-panel"><div className="panel-footnote"><LoaderCircle className="spin" size={15} /> Collecting live cluster resources...</div></section></div>}
         {snapshot && snapshot.warnings.length > 0 && <div className="cluster-screen-content"><div className="error-message"><AlertCircle size={16} /><span>{snapshot.warnings.map((warning) => warning.message).join(" ")}</span></div></div>}
-        {snapshot && activeView === "overview" && <ClusterOverview snapshot={snapshot} onNavigate={setActiveView} />}
-        {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} onRefresh={refreshSnapshot} isRefreshing={isRefreshing} manualRefreshEnabled={manualRefreshEnabled} />}
+        {snapshot && activeView === "overview" && <ClusterOverview snapshot={snapshot} onNavigate={setActiveView} onShowWorkloads={(filter) => { setWorkloadFilter(filter); setActiveView("workloads"); }} />}
+        {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} filter={workloadFilter} onFilterChange={setWorkloadFilter} onRefresh={refreshSnapshot} isRefreshing={isRefreshing} manualRefreshEnabled={manualRefreshEnabled} />}
         {snapshot && activeView === "resources" && <ClusterResources snapshot={snapshot} />}
         {snapshot && activeView === "cost" && <ClusterCostExplorer snapshot={snapshot} />}
         {snapshot && activeView === "namespaces" && <ClusterNamespaces snapshot={snapshot} />}
@@ -627,22 +629,33 @@ function ClusterScreenHeader({ view, snapshot, isRefreshing, onRefresh, manualRe
   </div>;
 }
 
-function DemoMetric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "good" | "warning" }) {
-  return <div className={`cluster-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
+function DemoMetric({ label, value, detail, icon, tone = "neutral", onClick }: { label: string; value: string; detail?: string; icon?: React.ReactNode; tone?: "neutral" | "good" | "warning"; onClick?: () => void }) {
+  const className = `cluster-metric ${detail ? "" : "compact "}${icon ? "with-icon " : ""}${onClick ? "interactive " : ""}${tone}`;
+  const content = <><span>{label}</span><strong>{value}</strong>{detail && <small>{detail}</small>}{icon && <span className="cluster-metric-icon" aria-hidden="true">{icon}</span>}</>;
+  return onClick
+    ? <button type="button" className={className} onClick={onClick} aria-label={`View ${label.toLowerCase()}`}>{content}</button>
+    : <div className={className}>{content}</div>;
 }
 
-function ClusterOverview({ snapshot, onNavigate }: { snapshot: ClusterSnapshot; onNavigate: (view: ClusterView) => void }) {
+function ClusterOverview({ snapshot, onNavigate, onShowWorkloads }: { snapshot: ClusterSnapshot; onNavigate: (view: ClusterView) => void; onShowWorkloads: (filter: WorkloadFilter) => void }) {
   const { summary } = snapshot;
-  const scheduledRequests = snapshot.nodes.reduce((total, node) => addResourceValues(total, node.requests), emptyResourceValues());
+  const usableNodes = snapshot.nodes.filter((node) => node.ready && node.schedulable);
+  const unavailableNodes = snapshot.nodes.filter((node) => !node.ready || !node.schedulable);
+  const usableRequests = usableNodes.reduce((total, node) => addResourceValues(total, node.requests), emptyResourceValues());
+  const usableAllocatable = usableNodes.reduce((total, node) => addResourceValues(total, node.allocatable), emptyResourceValues());
+  const unavailableCapacity = unavailableNodes.reduce((total, node) => addResourceValues(total, node.allocatable), emptyResourceValues());
   const unhealthyWorkloads = snapshot.workloads.filter((workload) => workload.readyReplicas < workload.desiredReplicas).length;
-  const health = summary.nodeCount > 0 && summary.readyNodeCount === summary.nodeCount ? "Healthy" : "Attention";
+  const incompleteApplicationWorkloads = snapshot.workloads.filter((workload) => workload.missingRequests && !isSystemNamespace(workload.namespace)).length;
+  const incompleteSystemWorkloads = snapshot.workloads.filter((workload) => workload.missingRequests && isSystemNamespace(workload.namespace)).length;
+  const cordonedNodes = snapshot.nodes.filter((node) => node.ready && !node.schedulable).length;
+  const health = summary.nodeCount > 0 && usableNodes.length === summary.nodeCount ? "Healthy" : "Attention";
   return <div className="cluster-screen-content">
-    <div className="cluster-metrics"><DemoMetric label="Cluster health" value={health} detail={`${summary.readyNodeCount} of ${summary.nodeCount} nodes ready`} tone={health === "Healthy" ? "good" : "warning"} /><DemoMetric label="Nodes" value={`${summary.readyNodeCount} / ${summary.nodeCount}`} detail="Ready nodes" tone={summary.readyNodeCount === summary.nodeCount ? "good" : "warning"} /><DemoMetric label="Workloads" value={String(summary.workloadCount)} detail={`Across ${summary.namespaceCount} namespaces`} /><DemoMetric label="Other resources" value={String(summary.resourceCount)} detail="Batch, config, network, storage, policy" /></div>
+    <div className="cluster-metrics"><DemoMetric label="Cluster health" value={health} detail={`${usableNodes.length} of ${summary.nodeCount} nodes available`} icon={<Activity size={25} />} tone={health === "Healthy" ? "good" : "warning"} onClick={() => onNavigate("nodes")} /><DemoMetric label="Workloads" value={String(summary.workloadCount)} icon={<Boxes size={25} />} onClick={() => onNavigate("workloads")} /><DemoMetric label="Namespaces" value={String(summary.namespaceCount)} icon={<Layers3 size={25} />} onClick={() => onNavigate("namespaces")} /><DemoMetric label="Other resources" value={String(summary.resourceCount)} icon={<Database size={25} />} onClick={() => onNavigate("resources")} /></div>
     <div className="cluster-grid-two">
-      <section className="cluster-panel"><PanelHeading title="Scheduled requests" action="View nodes" onAction={() => onNavigate("nodes")} /><div className="capacity-list"><CapacityRow label="CPU requests" value={resourcePercent(scheduledRequests.cpuMilli, summary.allocatable.cpuMilli)} color="blue" /><CapacityRow label="Memory requests" value={resourcePercent(scheduledRequests.memoryBytes, summary.allocatable.memoryBytes)} color="green" /><CapacityRow label="Storage requests" value={resourcePercent(scheduledRequests.storageBytes, summary.allocatable.storageBytes)} color="orange" /></div><div className="panel-footnote"><Activity size={14} /> Requested resources only. This is not observed utilization.</div></section>
-      <section className="cluster-panel"><PanelHeading title="Attention needed" action="View workloads" onAction={() => onNavigate("workloads")} /><div className="attention-list"><AttentionRow icon={<AlertCircle size={16} />} title={`${summary.missingRequestWorkloads} workloads have incomplete requests`} detail="CPU or memory request is missing" tone={summary.missingRequestWorkloads > 0 ? "warning" : "good"} /><AttentionRow icon={unhealthyWorkloads > 0 ? <AlertCircle size={16} /> : <Check size={16} />} title={unhealthyWorkloads > 0 ? `${unhealthyWorkloads} workloads are not fully ready` : "All discovered workloads are ready"} detail="Compared with desired replicas" tone={unhealthyWorkloads > 0 ? "warning" : "good"} /><AttentionRow icon={<RefreshCw size={16} />} title="Live snapshot collected" detail={new Date(snapshot.collectedAt).toLocaleString()} tone="neutral" /></div></section>
+      <section className="cluster-panel"><PanelHeading title="Requests on usable nodes" action="View nodes" onAction={() => onNavigate("nodes")} /><div className="capacity-list"><CapacityRow label="CPU requests" value={resourcePercent(usableRequests.cpuMilli, usableAllocatable.cpuMilli)} color="blue" /><CapacityRow label="Memory requests" value={resourcePercent(usableRequests.memoryBytes, usableAllocatable.memoryBytes)} color="green" /><CapacityRow label="Ephemeral storage requests" value={resourcePercent(usableRequests.storageBytes, usableAllocatable.storageBytes)} color="orange" /></div><div className="panel-footnote"><Activity size={14} /> Ready, schedulable nodes only. Requested resources are not observed utilization.</div></section>
+      <section className="cluster-panel"><PanelHeading title="Operational status" /><div className="attention-list"><AttentionRow icon={incompleteApplicationWorkloads > 0 ? <AlertCircle size={16} /> : <Check size={16} />} title={incompleteApplicationWorkloads > 0 ? `${incompleteApplicationWorkloads} application workloads have incomplete requests` : "Application workload requests are complete"} detail={incompleteApplicationWorkloads > 0 ? "CPU or memory request is missing" : "CPU and memory requests are configured"} tone={incompleteApplicationWorkloads > 0 ? "warning" : "good"} onClick={() => onShowWorkloads("incomplete-application")} /><AttentionRow icon={incompleteSystemWorkloads > 0 ? <AlertCircle size={16} /> : <Check size={16} />} title={incompleteSystemWorkloads > 0 ? `${incompleteSystemWorkloads} system workloads have incomplete requests` : "System workload requests are complete"} detail={incompleteSystemWorkloads > 0 ? "Review missing CPU or memory requests in platform-managed namespaces" : "CPU and memory requests are configured"} tone={incompleteSystemWorkloads > 0 ? "warning" : "good"} onClick={() => onShowWorkloads("incomplete-system")} /><AttentionRow icon={unavailableNodes.length > 0 ? <AlertCircle size={16} /> : <Check size={16} />} title={unavailableNodes.length > 0 ? `${unavailableNodes.length} nodes are unavailable for scheduling` : "All nodes are available for scheduling"} detail={unavailableNodes.length > 0 ? `${formatCPU(unavailableCapacity.cpuMilli)} CPU and ${formatBytes(unavailableCapacity.memoryBytes)} memory unavailable${cordonedNodes > 0 ? `; ${cordonedNodes} cordoned` : ""}` : "No NotReady or cordoned nodes"} tone={unavailableNodes.length > 0 ? "warning" : "good"} /><AttentionRow icon={unhealthyWorkloads > 0 ? <AlertCircle size={16} /> : <Check size={16} />} title={unhealthyWorkloads > 0 ? `${unhealthyWorkloads} workloads are not fully ready` : "All discovered workloads are ready"} detail="Compared with desired replicas" tone={unhealthyWorkloads > 0 ? "warning" : "good"} /></div></section>
     </div>
-    <section className="cluster-panel"><PanelHeading title="CPU requests by namespace" action="View namespaces" onAction={() => onNavigate("namespaces")} /><NamespaceBars snapshot={snapshot} /></section>
+    <section className="cluster-panel"><PanelHeading title="Top CPU-requesting namespaces" action="View namespaces" onAction={() => onNavigate("namespaces")} /><NamespaceBars snapshot={snapshot} /></section>
   </div>;
 }
 
@@ -650,8 +663,11 @@ function CapacityRow({ label, value, color }: { label: string; value: string; co
   return <div className="capacity-row"><div><span>{label}</span><strong>{value}</strong></div><div className="capacity-track"><span className={color} style={{ width: value }} /></div></div>;
 }
 
-function AttentionRow({ icon, title, detail, tone }: { icon: React.ReactNode; title: string; detail: string; tone: string }) {
-  return <div className={`attention-row ${tone}`}><span className="attention-icon">{icon}</span><div><strong>{title}</strong><small>{detail}</small></div></div>;
+function AttentionRow({ icon, title, detail, tone, onClick }: { icon: React.ReactNode; title: string; detail: string; tone: string; onClick?: () => void }) {
+  const content = <><span className="attention-icon">{icon}</span><div><strong>{title}</strong><small>{detail}</small></div></>;
+  return onClick
+    ? <button type="button" className={`attention-row interactive ${tone}`} onClick={onClick}>{content}</button>
+    : <div className={`attention-row ${tone}`}>{content}</div>;
 }
 
 function PanelHeading({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
@@ -659,13 +675,26 @@ function PanelHeading({ title, action, onAction }: { title: string; action?: str
 }
 
 function NamespaceBars({ snapshot }: { snapshot: ClusterSnapshot }) {
-  const namespaces = [...snapshot.namespaces].sort((left, right) => right.requests.cpuMilli - left.requests.cpuMilli).slice(0, 6);
-  const largest = namespaces[0]?.requests.cpuMilli ?? 0;
-  return <div className="namespace-bars">{namespaces.map((namespace) => <div className="namespace-bar" key={namespace.name}><div><span>{namespace.name}</span><strong>{formatCPU(namespace.requests.cpuMilli)}<small> requested</small></strong></div><div className="capacity-track"><span style={{ width: largest > 0 ? `${Math.round(namespace.requests.cpuMilli / largest * 100)}%` : "0%" }} /></div></div>)}</div>;
+  const namespaces = [...snapshot.namespaces].sort((left, right) => right.requests.cpuMilli - left.requests.cpuMilli).slice(0, 3);
+  const totalCPU = snapshot.namespaces.reduce((total, namespace) => total + namespace.requests.cpuMilli, 0);
+  return <div className="namespace-bars">{namespaces.map((namespace) => {
+    const percentage = totalCPU > 0 ? Math.round(namespace.requests.cpuMilli / totalCPU * 100) : 0;
+    return <div className="namespace-bar" key={namespace.name}><div><span className="namespace-name">{namespace.name}{isSystemNamespace(namespace.name) && <small className="system-namespace-label">System</small>}</span><strong>{formatCPU(namespace.requests.cpuMilli)}<small>{percentage}% of total</small></strong></div><div className="capacity-track"><span style={{ width: `${percentage}%` }} /></div></div>;
+  })}<div className="panel-footnote standalone">Showing the top {Math.min(3, snapshot.namespaces.length)} of {snapshot.namespaces.length} namespaces by requested CPU.</div></div>;
 }
 
-function ClusterWorkloads({ snapshot, onRefresh, isRefreshing, manualRefreshEnabled }: { snapshot: ClusterSnapshot; onRefresh: () => void; isRefreshing: boolean; manualRefreshEnabled: boolean }) {
-  return <div className="cluster-screen-content"><div className="table-toolbar"><div className="fake-search"><Search size={15} /><span>{snapshot.workloads.length} workloads in scope</span></div>{manualRefreshEnabled && <button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh workloads"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button>}</div><section className="cluster-panel table-panel"><div className="table-summary"><span>{snapshot.workloads.length} workloads discovered</span><span>Declared resource requests</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Workload</th><th>Kind</th><th>Namespace</th><th>Ready</th><th>Requests</th></tr></thead><tbody>{snapshot.workloads.map((workload) => <tr key={workload.uid || `${workload.kind}/${workload.namespace}/${workload.name}`}><td><strong>{workload.name}</strong><small>{workload.missingRequests ? "CPU or memory request missing" : `${workload.containers.length} containers collected`}</small></td><td>{workload.kind}</td><td><span className="namespace-tag">{workload.namespace}</span></td><td><span className={workload.readyReplicas >= workload.desiredReplicas ? "status-good" : "status-warning"}>{workload.readyReplicas >= workload.desiredReplicas ? <Check size={13} /> : <AlertCircle size={13} />} {workload.readyReplicas} / {workload.desiredReplicas}</span></td><td className="cost-cell">{formatCPU(workload.requests.cpuMilli)} / {formatBytes(workload.requests.memoryBytes)}</td></tr>)}</tbody></table></div></section></div>;
+function ClusterWorkloads({ snapshot, filter, onFilterChange, onRefresh, isRefreshing, manualRefreshEnabled }: { snapshot: ClusterSnapshot; filter: WorkloadFilter; onFilterChange: (filter: WorkloadFilter) => void; onRefresh: () => void; isRefreshing: boolean; manualRefreshEnabled: boolean }) {
+  const workloads = snapshot.workloads.filter((workload) => {
+    if (filter === "incomplete") return workload.missingRequests;
+    if (filter === "incomplete-application") return workload.missingRequests && !isSystemNamespace(workload.namespace);
+    if (filter === "incomplete-system") return workload.missingRequests && isSystemNamespace(workload.namespace);
+    return true;
+  });
+  return <div className="cluster-screen-content"><div className="table-toolbar"><div className="fake-search"><Search size={15} /><span>{workloads.length} of {snapshot.workloads.length} workloads</span></div><div className="select-wrap workload-filter"><select value={filter} onChange={(event) => onFilterChange(event.target.value as WorkloadFilter)} aria-label="Filter workloads"><option value="all">All workloads</option><option value="incomplete">All incomplete requests</option><option value="incomplete-application">Incomplete application workloads</option><option value="incomplete-system">Incomplete system workloads</option></select><ChevronDown size={14} /></div>{manualRefreshEnabled && <button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh workloads"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button>}</div><section className="cluster-panel table-panel"><div className="table-summary"><span>{workloads.length} workloads shown</span><span>Declared resource requests</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Workload</th><th>Kind</th><th>Namespace</th><th>Ready</th><th>Requests</th></tr></thead><tbody>{workloads.map((workload) => <tr key={workload.uid || `${workload.kind}/${workload.namespace}/${workload.name}`}><td><strong>{workload.name}</strong><small>{workload.missingRequests ? "CPU or memory request missing" : `${workload.containers.length} containers collected`}</small></td><td>{workload.kind}</td><td><span className="namespace-tag">{workload.namespace}</span></td><td><span className={workload.readyReplicas >= workload.desiredReplicas ? "status-good" : "status-warning"}>{workload.readyReplicas >= workload.desiredReplicas ? <Check size={13} /> : <AlertCircle size={13} />} {workload.readyReplicas} / {workload.desiredReplicas}</span></td><td className="cost-cell">{formatCPU(workload.requests.cpuMilli)} / {formatBytes(workload.requests.memoryBytes)}</td></tr>)}</tbody></table></div></section></div>;
+}
+
+function isSystemNamespace(namespace: string) {
+  return namespace === "kube-system" || namespace === "kube-public" || namespace === "kube-node-lease" || namespace === "local-path-storage";
 }
 
 function ClusterResources({ snapshot }: { snapshot: ClusterSnapshot }) {
@@ -711,8 +740,10 @@ function ClusterNamespaces({ snapshot }: { snapshot: ClusterSnapshot }) {
 
 function ClusterNodes({ snapshot }: { snapshot: ClusterSnapshot }) {
   const instanceTypes = new Set(snapshot.nodes.map((node) => node.instanceType).filter(Boolean));
-  const scheduledRequests = snapshot.nodes.reduce((total, node) => addResourceValues(total, node.requests), emptyResourceValues());
-  return <div className="cluster-screen-content"><div className="cluster-metrics"><DemoMetric label="Ready nodes" value={`${snapshot.summary.readyNodeCount} / ${snapshot.summary.nodeCount}`} detail={snapshot.summary.readyNodeCount === snapshot.summary.nodeCount ? "No unavailable nodes" : "Some nodes need attention"} tone={snapshot.summary.readyNodeCount === snapshot.summary.nodeCount ? "good" : "warning"} /><DemoMetric label="CPU allocatable" value={formatCPU(snapshot.summary.allocatable.cpuMilli)} detail={`${resourcePercent(scheduledRequests.cpuMilli, snapshot.summary.allocatable.cpuMilli)} requested`} /><DemoMetric label="Memory allocatable" value={formatBytes(snapshot.summary.allocatable.memoryBytes)} detail={`${resourcePercent(scheduledRequests.memoryBytes, snapshot.summary.allocatable.memoryBytes)} requested`} /><DemoMetric label="Instance types" value={String(instanceTypes.size)} detail={Array.from(instanceTypes).slice(0, 2).join(", ") || "Not reported"} /></div><section className="cluster-panel table-panel"><div className="table-summary"><span>Node capacity</span><span>Read-only inventory</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Node</th><th>Status</th><th>Role</th><th>CPU</th><th>Memory</th></tr></thead><tbody>{snapshot.nodes.map((node) => <tr key={node.uid || node.name}><td><strong>{node.name}</strong><small>{node.zone || node.instanceType || "Zone not reported"}</small></td><td><span className={node.ready ? "status-good" : "status-warning"}>{node.ready ? <Check size={13} /> : <AlertCircle size={13} />} {node.ready ? "Ready" : "Not ready"}</span></td><td>{node.role}</td><td>{resourcePercent(node.requests.cpuMilli, node.allocatable.cpuMilli)} requested</td><td>{resourcePercent(node.requests.memoryBytes, node.allocatable.memoryBytes)} requested</td></tr>)}</tbody></table></div></section></div>;
+  const usableNodes = snapshot.nodes.filter((node) => node.ready && node.schedulable);
+  const usableRequests = usableNodes.reduce((total, node) => addResourceValues(total, node.requests), emptyResourceValues());
+  const usableAllocatable = usableNodes.reduce((total, node) => addResourceValues(total, node.allocatable), emptyResourceValues());
+  return <div className="cluster-screen-content"><div className="cluster-metrics"><DemoMetric label="Usable nodes" value={`${usableNodes.length} / ${snapshot.summary.nodeCount}`} detail={usableNodes.length === snapshot.summary.nodeCount ? "All nodes ready and schedulable" : "NotReady or cordoned nodes excluded"} tone={usableNodes.length === snapshot.summary.nodeCount ? "good" : "warning"} /><DemoMetric label="Usable CPU" value={formatCPU(usableAllocatable.cpuMilli)} detail={`${resourcePercent(usableRequests.cpuMilli, usableAllocatable.cpuMilli)} requested`} /><DemoMetric label="Usable memory" value={formatBytes(usableAllocatable.memoryBytes)} detail={`${resourcePercent(usableRequests.memoryBytes, usableAllocatable.memoryBytes)} requested`} /><DemoMetric label="Instance types" value={String(instanceTypes.size)} detail={Array.from(instanceTypes).slice(0, 2).join(", ") || "Not reported"} /></div><section className="cluster-panel table-panel"><div className="table-summary"><span>Node capacity</span><span>Read-only inventory</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Node</th><th>Status</th><th>Scheduling</th><th>Role</th><th>CPU</th><th>Memory</th></tr></thead><tbody>{snapshot.nodes.map((node) => <tr key={node.uid || node.name}><td><strong>{node.name}</strong><small>{node.zone || node.instanceType || "Zone not reported"}</small></td><td><span className={node.ready ? "status-good" : "status-warning"}>{node.ready ? <Check size={13} /> : <AlertCircle size={13} />} {node.ready ? "Ready" : "Not ready"}</span></td><td><span className={node.schedulable ? "status-good" : "status-warning"}>{node.schedulable ? <Check size={13} /> : <AlertCircle size={13} />} {node.schedulable ? "Schedulable" : "Cordoned"}</span></td><td>{node.role}</td><td>{resourcePercent(node.requests.cpuMilli, node.allocatable.cpuMilli)} requested</td><td>{resourcePercent(node.requests.memoryBytes, node.allocatable.memoryBytes)} requested</td></tr>)}</tbody></table></div></section></div>;
 }
 
 function emptyResourceValues() {
