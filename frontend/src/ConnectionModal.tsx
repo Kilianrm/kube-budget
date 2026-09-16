@@ -18,7 +18,7 @@ import {
 import { useState } from "react";
 import { useEffect, useRef } from "react";
 import { listKubeconfigContexts } from "./backend";
-import { ClusterConnection, useCluster } from "./ClusterContext";
+import { ClusterConnection, defaultRefreshIntervalMs, useCluster } from "./ClusterContext";
 
 interface ConnectionModalProps {
   isOpen: boolean;
@@ -32,7 +32,7 @@ const connectionSteps = [
 ];
 
 export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
-  const { clusterConnection, isConnecting, connectionError, connect, confirmConnection, disconnect } = useCluster();
+  const { clusterConnection, isConnecting, connectionError, connect, confirmConnection, updateConnection, disconnect } = useCluster();
   const source = "kubeconfig" as const;
   const [connectionName, setConnectionName] = useState("Local development");
   const [kubeconfigPath, setKubeconfigPath] = useState("~/.kube/config");
@@ -40,6 +40,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
   const [contexts, setContexts] = useState<Array<{ name: string; server: string }>>([]);
   const [namespace, setNamespace] = useState("All namespaces");
   const [readOnly, setReadOnly] = useState(true);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState<number | null>(defaultRefreshIntervalMs);
   const [notice, setNotice] = useState("");
   const [noticeKind, setNoticeKind] = useState<"info" | "success" | "error">("info");
   const [completedSteps, setCompletedSteps] = useState(0);
@@ -126,6 +127,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
           context,
           namespace,
           readOnly,
+          refreshIntervalMs,
           connectedAt: Date.now(),
         }),
         minimumCheckTime,
@@ -148,6 +150,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
       setConnectionName("Local development");
       setKubeconfigPath("~/.kube/config");
       setReadOnly(true);
+      setRefreshIntervalMs(defaultRefreshIntervalMs);
     } catch (error) {
       window.clearInterval(stepProgress);
       await minimumCheckTime;
@@ -265,6 +268,24 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
                 <span className="detail-label">Access mode</span>
                 <span className="detail-value">{displayedConnection.readOnly ? "Read only" : "Read/Write"}</span>
               </div>
+              <label className="form-field full-width">
+                <span>Automatic refresh</span>
+                <div className="select-wrap">
+                  <select
+                    value={displayedConnection.refreshIntervalMs ?? ""}
+                    onChange={(event) => updateConnection({ refreshIntervalMs: event.target.value ? Number(event.target.value) : null })}
+                    disabled={isDisconnecting}
+                  >
+                    <option value="">Off (manual refresh only)</option>
+                    <option value="10000">Every 10 seconds</option>
+                    <option value="30000">Every 30 seconds</option>
+                    <option value="60000">Every minute</option>
+                    <option value="300000">Every 5 minutes</option>
+                    <option value="600000">Every 10 minutes</option>
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
+              </label>
               <div className="detail-row">
                 <span className="detail-label">Connected since</span>
                 <span className="detail-value">
@@ -400,6 +421,21 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
                     <option>default</option>
                     <option>production</option>
                     <option>kube-system</option>
+                  </select>
+                  <ChevronDown size={15} />
+                </div>
+              </label>
+
+              <label className="form-field full-width">
+                <span>Automatic refresh</span>
+                <div className="select-wrap">
+                  <select value={refreshIntervalMs ?? ""} onChange={(event) => setRefreshIntervalMs(event.target.value ? Number(event.target.value) : null)}>
+                    <option value="">Off (manual refresh only)</option>
+                    <option value="10000">Every 10 seconds</option>
+                    <option value="30000">Every 30 seconds</option>
+                    <option value="60000">Every minute</option>
+                    <option value="300000">Every 5 minutes</option>
+                    <option value="600000">Every 10 minutes</option>
                   </select>
                   <ChevronDown size={15} />
                 </div>

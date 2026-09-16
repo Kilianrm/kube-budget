@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from "react";
 import { testClusterConnection } from "./backend";
 
+export const defaultRefreshIntervalMs = 30_000;
+
 export interface ClusterConnection {
   name: string;
   source: "kubeconfig" | "manual";
@@ -9,6 +11,7 @@ export interface ClusterConnection {
   apiServerUrl?: string;
   namespace: string;
   readOnly: boolean;
+  refreshIntervalMs: number | null;
   connectedAt: number;
   server?: string;
   version?: string;
@@ -20,6 +23,7 @@ interface ClusterContextType {
   connectionError: string | null;
   connect: (connection: ClusterConnection) => Promise<ClusterConnection>;
   confirmConnection: (connection: ClusterConnection) => void;
+  updateConnection: (updates: Partial<Pick<ClusterConnection, "refreshIntervalMs">>) => void;
   disconnect: () => void;
   isConnected: () => boolean;
 }
@@ -31,7 +35,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     // Try to restore connection from localStorage
     try {
       const stored = localStorage.getItem("cluster-connection");
-      return stored ? JSON.parse(stored) : null;
+      return stored ? { refreshIntervalMs: defaultRefreshIntervalMs, ...JSON.parse(stored) } : null;
     } catch {
       return null;
     }
@@ -69,6 +73,15 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     setConnectionError(null);
   }, []);
 
+  const updateConnection = useCallback((updates: Partial<Pick<ClusterConnection, "refreshIntervalMs">>) => {
+    setClusterConnection((current) => {
+      if (!current) return current;
+      const updated = { ...current, ...updates };
+      localStorage.setItem("cluster-connection", JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   const disconnect = useCallback(() => {
     setClusterConnection(null);
     localStorage.removeItem("cluster-connection");
@@ -87,6 +100,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
         connectionError,
         connect,
         confirmConnection,
+        updateConnection,
         disconnect,
         isConnected,
       }}

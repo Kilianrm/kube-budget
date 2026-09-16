@@ -525,6 +525,7 @@ function ClusterConnection() {
   const [snapshot, setSnapshot] = useState<ClusterSnapshot | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [snapshotError, setSnapshotError] = useState("");
+  const manualRefreshEnabled = clusterConnection?.refreshIntervalMs === null;
 
   const refreshSnapshot = useCallback(async () => {
     if (!clusterConnection?.context) {
@@ -551,6 +552,19 @@ function ClusterConnection() {
     if (isConnected()) void refreshSnapshot();
   }, [isConnected, refreshSnapshot]);
 
+  useEffect(() => {
+    const intervalMs = clusterConnection?.refreshIntervalMs;
+    if (!intervalMs) return;
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !isRefreshing) {
+        void refreshSnapshot();
+      }
+    }, intervalMs);
+
+    return () => window.clearInterval(intervalId);
+  }, [clusterConnection?.refreshIntervalMs, isRefreshing, refreshSnapshot]);
+
   if (!isConnected()) {
     return (
       <>
@@ -573,12 +587,12 @@ function ClusterConnection() {
         <div className="cluster-sidebar-spacer" />
       </aside>
       <section className="cluster-management-view">
-        <ClusterScreenHeader view={activeView} snapshot={snapshot} isRefreshing={isRefreshing} onRefresh={refreshSnapshot} />
+        <ClusterScreenHeader view={activeView} snapshot={snapshot} isRefreshing={isRefreshing} onRefresh={refreshSnapshot} manualRefreshEnabled={manualRefreshEnabled} />
         {snapshotError && <div className="error-message"><AlertCircle size={16} /><span>{snapshotError}</span></div>}
         {!snapshot && isRefreshing && <div className="cluster-screen-content"><section className="cluster-panel"><div className="panel-footnote"><LoaderCircle className="spin" size={15} /> Collecting live cluster resources...</div></section></div>}
         {snapshot && snapshot.warnings.length > 0 && <div className="cluster-screen-content"><div className="error-message"><AlertCircle size={16} /><span>{snapshot.warnings.map((warning) => warning.message).join(" ")}</span></div></div>}
         {snapshot && activeView === "overview" && <ClusterOverview snapshot={snapshot} onNavigate={setActiveView} />}
-        {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} onRefresh={refreshSnapshot} isRefreshing={isRefreshing} />}
+        {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} onRefresh={refreshSnapshot} isRefreshing={isRefreshing} manualRefreshEnabled={manualRefreshEnabled} />}
         {snapshot && activeView === "resources" && <ClusterResources snapshot={snapshot} />}
         {snapshot && activeView === "cost" && <ClusterCostExplorer snapshot={snapshot} />}
         {snapshot && activeView === "namespaces" && <ClusterNamespaces snapshot={snapshot} />}
@@ -602,13 +616,13 @@ const clusterViewTitles: Record<ClusterView, { title: string; description: strin
   nodes: { title: "Nodes", description: "Review node readiness and the capacity available to workloads." },
 };
 
-function ClusterScreenHeader({ view, snapshot, isRefreshing, onRefresh }: { view: ClusterView; snapshot: ClusterSnapshot | null; isRefreshing: boolean; onRefresh: () => void }) {
+function ClusterScreenHeader({ view, snapshot, isRefreshing, onRefresh, manualRefreshEnabled }: { view: ClusterView; snapshot: ClusterSnapshot | null; isRefreshing: boolean; onRefresh: () => void; manualRefreshEnabled: boolean }) {
   const details = clusterViewTitles[view];
   return <div className="management-header">
     <div><span className="step-label">CLUSTER / {view.toUpperCase()}</span><h1>{details.title}</h1><p>{details.description}</p></div>
     <div className="management-actions">
-      <span className="cluster-data-badge"><span /> {snapshot ? `Live · ${new Date(snapshot.collectedAt).toLocaleTimeString()}` : "Waiting for data"}</span>
-      <button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh cluster snapshot" aria-label="Refresh cluster snapshot"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button>
+      {manualRefreshEnabled && <button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh cluster snapshot" aria-label="Refresh cluster snapshot"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button>}
+      <span className="cluster-data-badge"><span /> {snapshot ? `Live / ${new Date(snapshot.collectedAt).toLocaleTimeString()}` : "Waiting for data"}</span>
     </div>
   </div>;
 }
@@ -650,8 +664,8 @@ function NamespaceBars({ snapshot }: { snapshot: ClusterSnapshot }) {
   return <div className="namespace-bars">{namespaces.map((namespace) => <div className="namespace-bar" key={namespace.name}><div><span>{namespace.name}</span><strong>{formatCPU(namespace.requests.cpuMilli)}<small> requested</small></strong></div><div className="capacity-track"><span style={{ width: largest > 0 ? `${Math.round(namespace.requests.cpuMilli / largest * 100)}%` : "0%" }} /></div></div>)}</div>;
 }
 
-function ClusterWorkloads({ snapshot, onRefresh, isRefreshing }: { snapshot: ClusterSnapshot; onRefresh: () => void; isRefreshing: boolean }) {
-  return <div className="cluster-screen-content"><div className="table-toolbar"><div className="fake-search"><Search size={15} /><span>{snapshot.workloads.length} workloads in scope</span></div><button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh workloads"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button></div><section className="cluster-panel table-panel"><div className="table-summary"><span>{snapshot.workloads.length} workloads discovered</span><span>Declared resource requests</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Workload</th><th>Kind</th><th>Namespace</th><th>Ready</th><th>Requests</th></tr></thead><tbody>{snapshot.workloads.map((workload) => <tr key={workload.uid || `${workload.kind}/${workload.namespace}/${workload.name}`}><td><strong>{workload.name}</strong><small>{workload.missingRequests ? "CPU or memory request missing" : `${workload.containers.length} containers collected`}</small></td><td>{workload.kind}</td><td><span className="namespace-tag">{workload.namespace}</span></td><td><span className={workload.readyReplicas >= workload.desiredReplicas ? "status-good" : "status-warning"}>{workload.readyReplicas >= workload.desiredReplicas ? <Check size={13} /> : <AlertCircle size={13} />} {workload.readyReplicas} / {workload.desiredReplicas}</span></td><td className="cost-cell">{formatCPU(workload.requests.cpuMilli)} · {formatBytes(workload.requests.memoryBytes)}</td></tr>)}</tbody></table></div></section></div>;
+function ClusterWorkloads({ snapshot, onRefresh, isRefreshing, manualRefreshEnabled }: { snapshot: ClusterSnapshot; onRefresh: () => void; isRefreshing: boolean; manualRefreshEnabled: boolean }) {
+  return <div className="cluster-screen-content"><div className="table-toolbar"><div className="fake-search"><Search size={15} /><span>{snapshot.workloads.length} workloads in scope</span></div>{manualRefreshEnabled && <button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh workloads"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button>}</div><section className="cluster-panel table-panel"><div className="table-summary"><span>{snapshot.workloads.length} workloads discovered</span><span>Declared resource requests</span></div><div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Workload</th><th>Kind</th><th>Namespace</th><th>Ready</th><th>Requests</th></tr></thead><tbody>{snapshot.workloads.map((workload) => <tr key={workload.uid || `${workload.kind}/${workload.namespace}/${workload.name}`}><td><strong>{workload.name}</strong><small>{workload.missingRequests ? "CPU or memory request missing" : `${workload.containers.length} containers collected`}</small></td><td>{workload.kind}</td><td><span className="namespace-tag">{workload.namespace}</span></td><td><span className={workload.readyReplicas >= workload.desiredReplicas ? "status-good" : "status-warning"}>{workload.readyReplicas >= workload.desiredReplicas ? <Check size={13} /> : <AlertCircle size={13} />} {workload.readyReplicas} / {workload.desiredReplicas}</span></td><td className="cost-cell">{formatCPU(workload.requests.cpuMilli)} / {formatBytes(workload.requests.memoryBytes)}</td></tr>)}</tbody></table></div></section></div>;
 }
 
 function ClusterResources({ snapshot }: { snapshot: ClusterSnapshot }) {
