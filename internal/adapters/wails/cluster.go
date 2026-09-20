@@ -2,6 +2,7 @@ package wails
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -12,11 +13,14 @@ import (
 	kubernetesadapter "kube-budget/internal/adapters/kubernetes"
 	clustermode "kube-budget/internal/application/cluster"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -53,6 +57,14 @@ type ClusterSnapshotRequest struct {
 	KubeconfigPath string `json:"kubeconfigPath"`
 	Context        string `json:"context"`
 	Namespace      string `json:"namespace"`
+}
+
+type WorkloadYAMLRequest struct {
+	KubeconfigPath string `json:"kubeconfigPath"`
+	Context        string `json:"context"`
+	Kind           string `json:"kind"`
+	Namespace      string `json:"namespace"`
+	Name           string `json:"name"`
 }
 
 func NewClusterAdapter() *ClusterAdapter {
@@ -142,6 +154,67 @@ func (adapter *ClusterAdapter) GetClusterSnapshot(request ClusterSnapshotRequest
 		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: collect resources: %w", err)
 	}
 	return snapshot, nil
+}
+
+// GetWorkloadYAML returns the current, read-only YAML representation of a collected workload.
+func (adapter *ClusterAdapter) GetWorkloadYAML(request WorkloadYAMLRequest) (string, error) {
+	if strings.TrimSpace(request.Context) == "" {
+		return "", fmt.Errorf("workload YAML: context is required")
+	}
+	if strings.TrimSpace(request.Namespace) == "" || strings.TrimSpace(request.Name) == "" {
+		return "", fmt.Errorf("workload YAML: namespace and name are required")
+	}
+
+	clientConfig, err := buildClientConfig(request.KubeconfigPath, request.Context)
+	if err != nil {
+		return "", err
+	}
+	client, err := kubernetes.NewForConfig(clientConfig)
+	if err != nil {
+		return "", fmt.Errorf("workload YAML: create Kubernetes client: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), clusterCollectionTimeout)
+	defer cancel()
+
+	return getWorkloadYAML(ctx, client, request)
+}
+
+func getWorkloadYAML(ctx context.Context, client kubernetes.Interface, request WorkloadYAMLRequest) (string, error) {
+	var object runtime.Object
+	var err error
+	switch strings.TrimSpace(request.Kind) {
+	case "Deployment":
+		object, err = client.AppsV1().Deployments(request.Namespace).Get(ctx, request.Name, metav1.GetOptions{})
+	case "StatefulSet":
+		object, err = client.AppsV1().StatefulSets(request.Namespace).Get(ctx, request.Name, metav1.GetOptions{})
+	case "DaemonSet":
+		object, err = client.AppsV1().DaemonSets(request.Namespace).Get(ctx, request.Name, metav1.GetOptions{})
+	default:
+		return "", fmt.Errorf("workload YAML: unsupported workload kind %q", request.Kind)
+	}
+	if err != nil {
+		return "", fmt.Errorf("workload YAML: get %s %s/%s: %w", request.Kind, request.Namespace, request.Name, err)
+	}
+
+	return marshalLiveYAML(object, request.Kind)
+}
+
+func marshalLiveYAML(object runtime.Object, kind string) (string, error) {
+	jsonData, err := json.Marshal(object)
+	if err != nil {
+		return "", fmt.Errorf("workload YAML: marshal live object: %w", err)
+	}
+	manifest := make(map[string]any)
+	if err := json.Unmarshal(jsonData, &manifest); err != nil {
+		return "", fmt.Errorf("workload YAML: decode live object: %w", err)
+	}
+	manifest["apiVersion"] = "apps/v1"
+	manifest["kind"] = kind
+	yamlData, err := yaml.Marshal(manifest)
+	if err != nil {
+		return "", fmt.Errorf("workload YAML: encode live object: %w", err)
+	}
+	return string(yamlData), nil
 }
 
 func buildClientConfig(path, contextName string) (*rest.Config, error) {
