@@ -193,6 +193,7 @@ Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work o
 - [ ] Enhance Namespaces cluster section.
 - [ ] Enhance resource cluster section.
 - [ ] Enhance Nodes cluster section.
+- [ ] Create attack-simulator!
 ...
 - [ ] Add support for EKS ( AWS Elastic Kubernetes Service )
 - [ ] Add optimization module
