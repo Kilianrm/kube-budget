@@ -5,6 +5,8 @@ import {cluster} from '../models';
 
 export function GetClusterSnapshot(arg1:wails.ClusterSnapshotRequest):Promise<cluster.Snapshot>;
 
+export function GetWorkloadYAML(arg1:wails.WorkloadYAMLRequest):Promise<string>;
+
 export function ListKubeconfigContexts(arg1:wails.KubeconfigContextsRequest):Promise<Array<wails.KubeconfigContext>>;
 
 export function TestConnection(arg1:wails.ClusterConnectionRequest):Promise<wails.ClusterConnectionResult>;

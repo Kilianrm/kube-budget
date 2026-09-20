@@ -608,6 +608,27 @@ export namespace wails {
 	}
 	
 	
+	
+	export class WorkloadYAMLRequest {
+	    kubeconfigPath: string;
+	    context: string;
+	    kind: string;
+	    namespace: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkloadYAMLRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kubeconfigPath = source["kubeconfigPath"];
+	        this.context = source["context"];
+	        this.kind = source["kind"];
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	    }
+	}
 
 }
 

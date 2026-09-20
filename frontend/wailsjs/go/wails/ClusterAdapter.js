@@ -6,6 +6,10 @@ export function GetClusterSnapshot(arg1) {
   return window['go']['wails']['ClusterAdapter']['GetClusterSnapshot'](arg1);
 }
 
+export function GetWorkloadYAML(arg1) {
+  return window['go']['wails']['ClusterAdapter']['GetWorkloadYAML'](arg1);
+}
+
 export function ListKubeconfigContexts(arg1) {
   return window['go']['wails']['ClusterAdapter']['ListKubeconfigContexts'](arg1);
 }
