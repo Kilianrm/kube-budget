@@ -1,7 +1,10 @@
 import { EstimateManifest } from "../wailsjs/go/wails/ManifestAdapter";
 import {
   GetClusterSnapshot,
+	GetWorkloadYAML,
   ListKubeconfigContexts,
+  ListEKSClusters,
+  PrepareEKSConnection,
   TestConnection,
 } from "../wailsjs/go/wails/ClusterAdapter";
 import { cluster, wails } from "../wailsjs/go/models";
@@ -54,6 +57,14 @@ export async function listKubeconfigContexts(kubeconfigPath: string): Promise<Cl
   return ListKubeconfigContexts(new wails.KubeconfigContextsRequest({ kubeconfigPath }));
 }
 
+export async function listEKSClusters(region: string, profile: string): Promise<string[]> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return ListEKSClusters(new wails.EKSClustersRequest({ region, profile }));
+}
+
 export async function testClusterConnection(
   kubeconfigPath: string,
   context: string,
@@ -63,6 +74,20 @@ export async function testClusterConnection(
   }
 
   return TestConnection(new wails.ClusterConnectionRequest({ kubeconfigPath, context }));
+}
+
+export async function prepareEKSConnection(request: {
+  kubeconfigPath: string;
+  clusterName: string;
+  region: string;
+  profile: string;
+  roleArn: string;
+}): Promise<{ kubeconfigPath: string; context: string }> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return PrepareEKSConnection(request);
 }
 
 export async function getClusterSnapshot(
@@ -75,4 +100,18 @@ export async function getClusterSnapshot(
   }
 
   return GetClusterSnapshot(new wails.ClusterSnapshotRequest({ kubeconfigPath, context, namespace }));
+}
+
+export async function getWorkloadYAML(
+  kubeconfigPath: string,
+  context: string,
+  kind: string,
+  namespace: string,
+  name: string,
+): Promise<string> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return GetWorkloadYAML(new wails.WorkloadYAMLRequest({ kubeconfigPath, context, kind, namespace, name }));
 }

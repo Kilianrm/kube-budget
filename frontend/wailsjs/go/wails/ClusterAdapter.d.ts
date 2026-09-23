@@ -7,6 +7,10 @@ export function GetClusterSnapshot(arg1:wails.ClusterSnapshotRequest):Promise<cl
 
 export function GetWorkloadYAML(arg1:wails.WorkloadYAMLRequest):Promise<string>;
 
+export function ListEKSClusters(arg1:wails.EKSClustersRequest):Promise<Array<string>>;
+
 export function ListKubeconfigContexts(arg1:wails.KubeconfigContextsRequest):Promise<Array<wails.KubeconfigContext>>;
+
+export function PrepareEKSConnection(arg1:wails.EKSConnectionRequest):Promise<wails.EKSConnectionResult>;
 
 export function TestConnection(arg1:wails.ClusterConnectionRequest):Promise<wails.ClusterConnectionResult>;

@@ -172,6 +172,19 @@ wails dev -tags webkit2_41
 
 Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work on the visual frontend without launching the desktop shell, run `npm run dev` from `frontend`; cost estimation is only available when the page runs inside Wails.
 
+### Amazon EKS connection MVP
+
+The dashboard supports EKS through the local AWS CLI and kubeconfig `exec` authentication. It does not collect or store AWS access keys, secret keys, or Kubernetes bearer tokens.
+
+Prerequisites:
+
+- AWS CLI v2 installed and available to the desktop application's `PATH`
+- An authenticated AWS session, for example `aws sso login --profile company-dev`
+- An IAM principal with `eks:DescribeCluster`
+- Kubernetes access to the cluster through an EKS access entry or Kubernetes RBAC
+
+In the cluster connection dialog, choose **Amazon EKS**, enter the cluster name and region, and optionally provide an AWS profile or role ARN. KubeBudget runs `aws eks update-kubeconfig`, creates an `eks/<cluster>/<region>` context, and then validates that context through the Kubernetes API. Private EKS endpoints still require local VPN or network access to the VPC.
+
 
 ## Roadmap
 
@@ -188,26 +201,27 @@ Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work o
 - [x] Implement log old estimations.
 - [x] Implement connection to a real cluster
 - [x] First responsabilities of cluster management approach...
-- [ ] Enhance Overview cluster section.
-- [ ] Enhance Workloads cluster section.
-- [ ] Enhance Namespaces cluster section.
-- [ ] Enhance resource cluster section.
-- [ ] Enhance Nodes cluster section.
-- [ ] Create attack-simulator!
+- [x] Enhance Overview cluster section.
+- [x] Enhance Workloads cluster section.
+- [x] Enhance Namespaces cluster section.
+- [x] Enhance resource cluster section.
+- [x] Enhance Nodes cluster section.
+- [x] Add live YAML workload inspection.
+- [ ] Add cluster support for EKS ( AWS Elastic Kubernetes Service )
+- [ ] Create change-states local simulator
 ...
-- [ ] Add support for EKS ( AWS Elastic Kubernetes Service )
-- [ ] Add optimization module
-- [ ] Add cost explorer cluster mode.
-- [ ] Add enhanced estimation in manifest mode when cluster is linked.
+- [ ] Add optimization module when provider is linked.
+- [ ] Add cost explorer in cluster section when cluster from provider is linked.
+- [ ] Add enhanced estimation in manifest mode when cluster from provider is linked.
 ...
 ...
 
+- [ ] Improve manifest converter ( Support more types of manifests)
 - [ ] Add Kubernetes admission webhook support
-- [ ] Improve pricing accuracy and configuration
-- [ ] Add support for GKE ( Google Kubernetes Engine)
-- [ ] Add support for AKS (Azure Kubernetes Service)
 - [ ] Add more workload types and resource coverage
 - [ ] Add support to be used in kubectl.
 - [ ] Add a GitHub Action that compares cost deltas in PRs
-- [ ] Improve manifest converter ( Support more types of manifests)
+...
+- [ ] Add FINAL documentation - design
+- [ ] Add explanation of possible future evolving (cluster persistent information, analyzis behaviour, google cluster support, azure cluster support,llm for predict costs...)
 

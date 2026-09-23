@@ -10,8 +10,16 @@ export function GetWorkloadYAML(arg1) {
   return window['go']['wails']['ClusterAdapter']['GetWorkloadYAML'](arg1);
 }
 
+export function ListEKSClusters(arg1) {
+  return window['go']['wails']['ClusterAdapter']['ListEKSClusters'](arg1);
+}
+
 export function ListKubeconfigContexts(arg1) {
   return window['go']['wails']['ClusterAdapter']['ListKubeconfigContexts'](arg1);
+}
+
+export function PrepareEKSConnection(arg1) {
+  return window['go']['wails']['ClusterAdapter']['PrepareEKSConnection'](arg1);
 }
 
 export function TestConnection(arg1) {

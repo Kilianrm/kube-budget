@@ -1,13 +1,17 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from "react";
-import { testClusterConnection } from "./backend";
+import { prepareEKSConnection, testClusterConnection } from "./backend";
 
 export const defaultRefreshIntervalMs = 30_000;
 
 export interface ClusterConnection {
   name: string;
-  source: "kubeconfig" | "manual";
+  source: "kubeconfig" | "eks" | "manual";
   kubeconfigPath?: string;
   context?: string;
+  clusterName?: string;
+  region?: string;
+  profile?: string;
+  roleArn?: string;
   apiServerUrl?: string;
   namespace: string;
   readOnly: boolean;
@@ -48,10 +52,25 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     setIsConnecting(true);
     setConnectionError(null);
     try {
-      const result = await testClusterConnection(connection.kubeconfigPath ?? "", connection.context ?? "");
+      let kubeconfigPath = connection.kubeconfigPath ?? "";
+      let context = connection.context ?? "";
+      if (connection.source === "eks") {
+        const prepared = await prepareEKSConnection({
+          kubeconfigPath,
+          clusterName: connection.clusterName ?? "",
+          region: connection.region ?? "",
+          profile: connection.profile ?? "",
+          roleArn: connection.roleArn ?? "",
+        });
+        kubeconfigPath = prepared.kubeconfigPath;
+        context = prepared.context;
+      }
+      const result = await testClusterConnection(kubeconfigPath, context);
 
       const connectedCluster: ClusterConnection = {
         ...connection,
+        kubeconfigPath,
+        context,
         connectedAt: result.connectedAt,
         server: result.server,
         version: result.version,

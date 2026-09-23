@@ -406,6 +406,54 @@ export namespace wails {
 	        this.namespace = source["namespace"];
 	    }
 	}
+	export class EKSClustersRequest {
+	    region: string;
+	    profile: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EKSClustersRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.region = source["region"];
+	        this.profile = source["profile"];
+	    }
+	}
+	export class EKSConnectionRequest {
+	    kubeconfigPath: string;
+	    clusterName: string;
+	    region: string;
+	    profile: string;
+	    roleArn: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EKSConnectionRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kubeconfigPath = source["kubeconfigPath"];
+	        this.clusterName = source["clusterName"];
+	        this.region = source["region"];
+	        this.profile = source["profile"];
+	        this.roleArn = source["roleArn"];
+	    }
+	}
+	export class EKSConnectionResult {
+	    kubeconfigPath: string;
+	    context: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EKSConnectionResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kubeconfigPath = source["kubeconfigPath"];
+	        this.context = source["context"];
+	    }
+	}
 	export class KubeconfigContext {
 	    name: string;
 	    server: string;

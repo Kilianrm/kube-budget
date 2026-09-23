@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
+  Cloud,
   Code2,
   FileCode2,
   KeyRound,
@@ -17,7 +18,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useEffect, useRef } from "react";
-import { listKubeconfigContexts } from "./backend";
+import { ClusterContext, listEKSClusters, listKubeconfigContexts } from "./backend";
 import { ClusterConnection, defaultRefreshIntervalMs, useCluster } from "./ClusterContext";
 
 interface ConnectionModalProps {
@@ -26,18 +27,23 @@ interface ConnectionModalProps {
 }
 
 const connectionSteps = [
-  "Read kubeconfig and selected context",
+  "Prepare the selected connection",
   "Verify access to the Kubernetes API",
   "Load cluster identity and version",
 ];
 
 export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
   const { clusterConnection, isConnecting, connectionError, connect, confirmConnection, updateConnection, disconnect } = useCluster();
-  const source = "kubeconfig" as const;
-  const [connectionName, setConnectionName] = useState("Local development");
+  const [source, setSource] = useState<"kubeconfig" | "eks">("kubeconfig");
   const [kubeconfigPath, setKubeconfigPath] = useState("~/.kube/config");
   const [context, setContext] = useState("");
-  const [contexts, setContexts] = useState<Array<{ name: string; server: string }>>([]);
+  const [clusterName, setClusterName] = useState("");
+  const [region, setRegion] = useState("us-east-1");
+  const [profile, setProfile] = useState("default");
+  const [roleArn, setRoleArn] = useState("");
+  const [eksClusters, setEksClusters] = useState<string[]>([]);
+  const [isLoadingEksClusters, setIsLoadingEksClusters] = useState(false);
+  const [contexts, setContexts] = useState<ClusterContext[]>([]);
   const [namespace, setNamespace] = useState("All namespaces");
   const [readOnly, setReadOnly] = useState(true);
   const [refreshIntervalMs, setRefreshIntervalMs] = useState<number | null>(defaultRefreshIntervalMs);
@@ -53,6 +59,29 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
   const modalFormRef = useRef<HTMLFormElement>(null);
 
   const displayedConnection = pendingConnection ?? clusterConnection;
+
+  function handleSourceChange(nextSource: "kubeconfig" | "eks") {
+    setSource(nextSource);
+    setContext("");
+    setNotice("");
+  }
+
+  function connectionDisplayName() {
+    if (source === "eks") return clusterName;
+
+    const selectedContext = contexts.find((availableContext) => availableContext.name === context);
+    const clusterIdentifier = selectedContext?.cluster ?? "";
+    if (context.startsWith("eks/")) {
+      return context.split("/")[1] || context;
+    }
+    if (clusterIdentifier.includes(":eks:") && clusterIdentifier.includes(":cluster/")) {
+      return clusterIdentifier.split(":cluster/")[1] || context;
+    }
+    if (selectedContext?.server.includes(".eks.amazonaws.com") && clusterIdentifier) {
+      return clusterIdentifier;
+    }
+    return context;
+  }
 
   function clearCommitTimer() {
     if (commitTimer.current !== null) {
@@ -87,10 +116,12 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
   useEffect(() => {
     if (!isOpen) return;
 
+    if (source === "eks") return;
+
     listKubeconfigContexts(kubeconfigPath)
       .then((availableContexts) => {
         setContexts(availableContexts);
-        setContext((current) => current || availableContexts[0]?.name || "");
+        setContext((current) => availableContexts.some((availableContext) => availableContext.name === current) ? current : "");
         setNotice(availableContexts.length ? "" : "No contexts were found in this kubeconfig");
       })
       .catch((error) => {
@@ -98,7 +129,34 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
         setContext("");
         setNotice(error instanceof Error ? error.message : "Unable to read kubeconfig");
       });
-  }, [isOpen, kubeconfigPath]);
+  }, [isOpen, kubeconfigPath, source]);
+
+  useEffect(() => {
+    if (!isOpen || source !== "eks" || !region.trim()) return;
+
+    let cancelled = false;
+    setIsLoadingEksClusters(true);
+    listEKSClusters(region, profile)
+      .then((availableClusters) => {
+        if (cancelled) return;
+        setEksClusters(availableClusters);
+        setClusterName((current) => availableClusters.includes(current) ? current : "");
+        setNotice(availableClusters.length ? "" : "No EKS clusters were found in this region");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setEksClusters([]);
+        setClusterName("");
+        setNotice(error instanceof Error ? error.message : "Unable to discover EKS clusters");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingEksClusters(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, profile, region, source]);
 
   useEffect(() => {
     if (isConnecting || isDisconnecting) {
@@ -121,10 +179,14 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
     try {
           const [connectedCluster] = await Promise.all([
           connect({
-          name: connectionName,
+          name: connectionDisplayName(),
           source,
           kubeconfigPath,
           context,
+          clusterName: source === "eks" ? clusterName : undefined,
+          region: source === "eks" ? region : undefined,
+          profile: source === "eks" ? profile : undefined,
+          roleArn: source === "eks" ? roleArn : undefined,
           namespace,
           readOnly,
           refreshIntervalMs,
@@ -147,7 +209,6 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
       }, 900);
 
       // Reset form
-      setConnectionName("Local development");
       setKubeconfigPath("~/.kube/config");
       setReadOnly(true);
       setRefreshIntervalMs(defaultRefreshIntervalMs);
@@ -242,9 +303,9 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
               </div>
               <div className="detail-row">
                 <span className="detail-label">Credential source</span>
-                  <span className="detail-value">{displayedConnection.source === "kubeconfig" ? "Kubeconfig" : "Manual credentials"}</span>
+                  <span className="detail-value">{displayedConnection.source === "eks" ? "Amazon EKS" : displayedConnection.source === "kubeconfig" ? "Kubeconfig" : "Manual credentials"}</span>
               </div>
-              {displayedConnection.source === "kubeconfig" && (
+              {displayedConnection.source !== "manual" && (
                 <>
                   <div className="detail-row">
                     <span className="detail-label">Context</span>
@@ -347,27 +408,25 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
               </div>
 
               <div className="source-control" role="group" aria-label="Connection source">
-                <div className="active">
+                <button type="button" className={source === "kubeconfig" ? "active" : ""} onClick={() => handleSourceChange("kubeconfig")}>
                   <Code2 size={16} />
                   <span>
-                    <strong>Kubeconfig</strong>
-                    <small>Use credentials from your kubeconfig file</small>
+                    <strong>Existing kubeconfig</strong>
+                    <small>Use any existing Kubernetes context</small>
                   </span>
-                </div>
+                </button>
+                <button type="button" className={source === "eks" ? "active" : ""} onClick={() => handleSourceChange("eks")}>
+                  <Cloud size={16} />
+                  <span>
+                    <strong>Discover Amazon EKS</strong>
+                    <small>Find an AWS cluster and configure its context</small>
+                  </span>
+                </button>
               </div>
 
               <div className="form-fields">
-                <label className="form-field full-width">
-                  <span>Connection name</span>
-                  <input
-                    value={connectionName}
-                    onChange={(e) => setConnectionName(e.target.value)}
-                    placeholder="Production cluster"
-                    required
-                  />
-                </label>
-
-                <>
+                {source === "kubeconfig" ? (
+                  <>
                     <label className="form-field full-width">
                       <span>Kubeconfig path</span>
                       <div className="path-input">
@@ -396,7 +455,36 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
                         <ChevronDown size={15} />
                       </div>
                     </label>
-                </>
+                  </>
+                ) : (
+                  <>
+                    <label className="form-field full-width">
+                      <span>EKS cluster</span>
+                      <div className="select-wrap">
+                        <select value={clusterName} onChange={(e) => setClusterName(e.target.value)} required disabled={isLoadingEksClusters}>
+                          <option value="" disabled>{isLoadingEksClusters ? "Discovering clusters..." : "Select an EKS cluster"}</option>
+                          {eksClusters.map((cluster) => (
+                            <option key={cluster} value={cluster}>{cluster}</option>
+                          ))}
+                        </select>
+                        <ChevronDown size={15} />
+                      </div>
+                    </label>
+                    <label className="form-field">
+                      <span>AWS region</span>
+                      <input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="eu-west-1" required />
+                    </label>
+                    <label className="form-field">
+                      <span>AWS profile</span>
+                      <input value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="default" />
+                    </label>
+                    <label className="form-field full-width">
+                      <span>Assume role ARN (optional)</span>
+                      <input value={roleArn} onChange={(e) => setRoleArn(e.target.value)} placeholder="arn:aws:iam::123456789012:role/KubeBudgetViewer" />
+                    </label>
+                    <p className="form-hint">Requires AWS CLI v2 and an active AWS SSO or IAM session.</p>
+                  </>
+                )}
               </div>
             </div>
 
