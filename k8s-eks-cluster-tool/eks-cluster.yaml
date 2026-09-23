@@ -1,0 +1,31 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: cluster-to-be-monitorized
+  region: us-east-1
+
+# The creator's IAM identity receives administrator access through EKS access entries.
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
+
+iam:
+  withOIDC: true
+
+managedNodeGroups:
+  - name: monitoring-workers
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 3
+    volumeSize: 20
+    volumeType: gp3
+    amiFamily: AmazonLinux2023
+    privateNetworking: false
+    labels:
+      workload: monitoring-demo
+
+addons:
+  - name: aws-ebs-csi-driver
+    wellKnownPolicies:
+      ebsCSIController: true
