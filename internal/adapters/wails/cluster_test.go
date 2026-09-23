@@ -17,6 +17,39 @@ func TestGetClusterSnapshotRequiresContext(t *testing.T) {
 	}
 }
 
+func TestValidateEKSConnectionRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		request EKSConnectionRequest
+		want    string
+	}{
+		{name: "missing cluster", request: EKSConnectionRequest{Region: "eu-west-1"}, want: "cluster name is required"},
+		{name: "missing region", request: EKSConnectionRequest{ClusterName: "production"}, want: "AWS region is required"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateEKSConnectionRequest(test.request)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateEKSConnectionRequest() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestEKSContextName(t *testing.T) {
+	if got := eksContextName("production", "eu-west-1"); got != "eks/production/eu-west-1" {
+		t.Fatalf("eksContextName() = %q, want %q", got, "eks/production/eu-west-1")
+	}
+}
+
+func TestEKSDiscoveryRequiresRegion(t *testing.T) {
+	_, err := NewClusterAdapter().ListEKSClusters(EKSClustersRequest{})
+	if err == nil || !strings.Contains(err.Error(), "AWS region is required") {
+		t.Fatalf("ListEKSClusters() error = %v, want region required error", err)
+	}
+}
+
 func TestGetWorkloadYAMLReturnsLiveDeploymentYAML(t *testing.T) {
 	client := fake.NewSimpleClientset(&appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "production", Labels: map[string]string{"app": "checkout"}},

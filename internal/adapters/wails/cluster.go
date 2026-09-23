@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,6 +48,24 @@ type ClusterConnectionRequest struct {
 	Context        string `json:"context"`
 }
 
+type EKSConnectionRequest struct {
+	KubeconfigPath string `json:"kubeconfigPath"`
+	ClusterName    string `json:"clusterName"`
+	Region         string `json:"region"`
+	Profile        string `json:"profile"`
+	RoleARN        string `json:"roleArn"`
+}
+
+type EKSConnectionResult struct {
+	KubeconfigPath string `json:"kubeconfigPath"`
+	Context        string `json:"context"`
+}
+
+type EKSClustersRequest struct {
+	Region  string `json:"region"`
+	Profile string `json:"profile"`
+}
+
 type ClusterConnectionResult struct {
 	Context     string `json:"context"`
 	Server      string `json:"server"`
@@ -69,6 +89,100 @@ type WorkloadYAMLRequest struct {
 
 func NewClusterAdapter() *ClusterAdapter {
 	return &ClusterAdapter{}
+}
+
+func (adapter *ClusterAdapter) ListEKSClusters(request EKSClustersRequest) ([]string, error) {
+	if strings.TrimSpace(request.Region) == "" {
+		return nil, fmt.Errorf("EKS discovery: AWS region is required")
+	}
+
+	awsPath, err := exec.LookPath("aws")
+	if err != nil {
+		return nil, fmt.Errorf("EKS discovery: AWS CLI was not found; install AWS CLI v2 and make sure it is available to the desktop app: %w", err)
+	}
+
+	args := []string{"eks", "list-clusters", "--region", strings.TrimSpace(request.Region), "--output", "json"}
+	if profile := strings.TrimSpace(request.Profile); profile != "" {
+		args = append(args, "--profile", profile)
+	}
+
+	command := exec.CommandContext(context.Background(), awsPath, args...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		details := strings.TrimSpace(string(output))
+		if details == "" {
+			details = err.Error()
+		}
+		return nil, fmt.Errorf("EKS discovery: AWS CLI could not list clusters: %s", details)
+	}
+
+	var response struct {
+		Clusters []string `json:"clusters"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, fmt.Errorf("EKS discovery: decode AWS CLI response: %w", err)
+	}
+	sort.Strings(response.Clusters)
+	return response.Clusters, nil
+}
+
+// PrepareEKSConnection creates a kubeconfig context using the user's AWS CLI credentials.
+func (adapter *ClusterAdapter) PrepareEKSConnection(request EKSConnectionRequest) (EKSConnectionResult, error) {
+	if err := validateEKSConnectionRequest(request); err != nil {
+		return EKSConnectionResult{}, err
+	}
+
+	awsPath, err := exec.LookPath("aws")
+	if err != nil {
+		return EKSConnectionResult{}, fmt.Errorf("EKS connection: AWS CLI was not found; install AWS CLI v2 and make sure it is available to the desktop app: %w", err)
+	}
+
+	kubeconfigPath, err := expandKubeconfigPath(request.KubeconfigPath)
+	if err != nil {
+		return EKSConnectionResult{}, err
+	}
+	if kubeconfigPath == "" {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return EKSConnectionResult{}, fmt.Errorf("EKS connection: resolve kubeconfig path: %w", homeErr)
+		}
+		kubeconfigPath = filepath.Join(home, ".kube", "config")
+	}
+
+	contextName := eksContextName(request.ClusterName, request.Region)
+	args := []string{"eks", "update-kubeconfig", "--name", strings.TrimSpace(request.ClusterName), "--region", strings.TrimSpace(request.Region), "--kubeconfig", kubeconfigPath, "--alias", contextName}
+	if profile := strings.TrimSpace(request.Profile); profile != "" {
+		args = append(args, "--profile", profile)
+	}
+	if roleARN := strings.TrimSpace(request.RoleARN); roleARN != "" {
+		args = append(args, "--role-arn", roleARN)
+	}
+
+	command := exec.CommandContext(context.Background(), awsPath, args...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		details := strings.TrimSpace(string(output))
+		if details == "" {
+			details = err.Error()
+		}
+		return EKSConnectionResult{}, fmt.Errorf("EKS connection: AWS CLI could not update kubeconfig: %s", details)
+	}
+
+	return EKSConnectionResult{KubeconfigPath: kubeconfigPath, Context: contextName}, nil
+}
+
+func validateEKSConnectionRequest(request EKSConnectionRequest) error {
+	if strings.TrimSpace(request.ClusterName) == "" {
+		return fmt.Errorf("EKS connection: cluster name is required")
+	}
+	if strings.TrimSpace(request.Region) == "" {
+		return fmt.Errorf("EKS connection: AWS region is required")
+	}
+	return nil
+}
+
+func eksContextName(clusterName, region string) string {
+	return "eks/" + strings.TrimSpace(clusterName) + "/" + strings.TrimSpace(region)
 }
 
 func (adapter *ClusterAdapter) ListKubeconfigContexts(request KubeconfigContextsRequest) ([]KubeconfigContext, error) {
