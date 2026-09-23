@@ -1,5 +1,25 @@
 export namespace cluster {
 	
+	export class Addon {
+	    name: string;
+	    version: string;
+	    status: string;
+	    health: string;
+	    serviceAccount: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Addon(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.status = source["status"];
+	        this.health = source["health"];
+	        this.serviceAccount = source["serviceAccount"];
+	    }
+	}
 	export class ClusterInfo {
 	    context: string;
 	    server: string;
@@ -136,6 +156,94 @@ export namespace cluster {
 	        this.capacity = this.convertValues(source["capacity"], ResourceValues);
 	        this.allocatable = this.convertValues(source["allocatable"], ResourceValues);
 	        this.requests = this.convertValues(source["requests"], ResourceValues);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class NodeGroup {
+	    name: string;
+	    status: string;
+	    instanceTypes: string[];
+	    capacityType: string;
+	    desiredSize: number;
+	    minSize: number;
+	    maxSize: number;
+	    amiType: string;
+	    nodeRole: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NodeGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.status = source["status"];
+	        this.instanceTypes = source["instanceTypes"];
+	        this.capacityType = source["capacityType"];
+	        this.desiredSize = source["desiredSize"];
+	        this.minSize = source["minSize"];
+	        this.maxSize = source["maxSize"];
+	        this.amiType = source["amiType"];
+	        this.nodeRole = source["nodeRole"];
+	    }
+	}
+	export class ProviderMetadata {
+	    provider: string;
+	    clusterName: string;
+	    clusterArn: string;
+	    accountId: string;
+	    region: string;
+	    status: string;
+	    kubernetesVersion: string;
+	    platformVersion: string;
+	    createdAt: number;
+	    endpointAccess: string;
+	    vpcId: string;
+	    subnetIds: string[];
+	    securityGroupIds: string[];
+	    authenticationMode: string;
+	    nodeGroups: NodeGroup[];
+	    addons: Addon[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ProviderMetadata(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.clusterName = source["clusterName"];
+	        this.clusterArn = source["clusterArn"];
+	        this.accountId = source["accountId"];
+	        this.region = source["region"];
+	        this.status = source["status"];
+	        this.kubernetesVersion = source["kubernetesVersion"];
+	        this.platformVersion = source["platformVersion"];
+	        this.createdAt = source["createdAt"];
+	        this.endpointAccess = source["endpointAccess"];
+	        this.vpcId = source["vpcId"];
+	        this.subnetIds = source["subnetIds"];
+	        this.securityGroupIds = source["securityGroupIds"];
+	        this.authenticationMode = source["authenticationMode"];
+	        this.nodeGroups = this.convertValues(source["nodeGroups"], NodeGroup);
+	        this.addons = this.convertValues(source["addons"], Addon);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -315,6 +423,7 @@ export namespace cluster {
 	    resources: Resource[];
 	    namespaces: NamespaceSummary[];
 	    warnings: Warning[];
+	    provider?: ProviderMetadata;
 	
 	    static createFrom(source: any = {}) {
 	        return new Snapshot(source);
@@ -331,6 +440,7 @@ export namespace cluster {
 	        this.resources = this.convertValues(source["resources"], Resource);
 	        this.namespaces = this.convertValues(source["namespaces"], NamespaceSummary);
 	        this.warnings = this.convertValues(source["warnings"], Warning);
+	        this.provider = this.convertValues(source["provider"], ProviderMetadata);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -394,6 +504,11 @@ export namespace wails {
 	    kubeconfigPath: string;
 	    context: string;
 	    namespace: string;
+	    provider: string;
+	    clusterName: string;
+	    region: string;
+	    profile: string;
+	    roleArn: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ClusterSnapshotRequest(source);
@@ -404,6 +519,11 @@ export namespace wails {
 	        this.kubeconfigPath = source["kubeconfigPath"];
 	        this.context = source["context"];
 	        this.namespace = source["namespace"];
+	        this.provider = source["provider"];
+	        this.clusterName = source["clusterName"];
+	        this.region = source["region"];
+	        this.profile = source["profile"];
+	        this.roleArn = source["roleArn"];
 	    }
 	}
 	export class EKSClustersRequest {

@@ -89,6 +89,45 @@ type Warning struct {
 	Message  string `json:"message"`
 }
 
+type ProviderMetadata struct {
+	Provider           string      `json:"provider"`
+	ClusterName        string      `json:"clusterName"`
+	ClusterARN         string      `json:"clusterArn"`
+	AccountID          string      `json:"accountId"`
+	Region             string      `json:"region"`
+	Status             string      `json:"status"`
+	KubernetesVersion  string      `json:"kubernetesVersion"`
+	PlatformVersion    string      `json:"platformVersion"`
+	CreatedAt          int64       `json:"createdAt"`
+	EndpointAccess     string      `json:"endpointAccess"`
+	VPCID              string      `json:"vpcId"`
+	SubnetIDs          []string    `json:"subnetIds"`
+	SecurityGroupIDs   []string    `json:"securityGroupIds"`
+	AuthenticationMode string      `json:"authenticationMode"`
+	NodeGroups         []NodeGroup `json:"nodeGroups"`
+	Addons             []Addon     `json:"addons"`
+}
+
+type NodeGroup struct {
+	Name          string   `json:"name"`
+	Status        string   `json:"status"`
+	InstanceTypes []string `json:"instanceTypes"`
+	CapacityType  string   `json:"capacityType"`
+	DesiredSize   int32    `json:"desiredSize"`
+	MinSize       int32    `json:"minSize"`
+	MaxSize       int32    `json:"maxSize"`
+	AmiType       string   `json:"amiType"`
+	NodeRole      string   `json:"nodeRole"`
+}
+
+type Addon struct {
+	Name           string `json:"name"`
+	Version        string `json:"version"`
+	Status         string `json:"status"`
+	Health         string `json:"health"`
+	ServiceAccount string `json:"serviceAccount"`
+}
+
 type Snapshot struct {
 	SchemaVersion int                `json:"schemaVersion"`
 	CollectedAt   int64              `json:"collectedAt"`
@@ -99,6 +138,7 @@ type Snapshot struct {
 	Resources     []Resource         `json:"resources"`
 	Namespaces    []NamespaceSummary `json:"namespaces"`
 	Warnings      []Warning          `json:"warnings"`
+	Provider      *ProviderMetadata  `json:"provider,omitempty"`
 }
 
 type CollectedData struct {

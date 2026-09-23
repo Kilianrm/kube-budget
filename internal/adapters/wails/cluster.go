@@ -14,6 +14,7 @@ import (
 
 	kubernetesadapter "kube-budget/internal/adapters/kubernetes"
 	clustermode "kube-budget/internal/application/cluster"
+	awsprovider "kube-budget/internal/providers/aws"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -77,6 +78,11 @@ type ClusterSnapshotRequest struct {
 	KubeconfigPath string `json:"kubeconfigPath"`
 	Context        string `json:"context"`
 	Namespace      string `json:"namespace"`
+	Provider       string `json:"provider"`
+	ClusterName    string `json:"clusterName"`
+	Region         string `json:"region"`
+	Profile        string `json:"profile"`
+	RoleARN        string `json:"roleArn"`
 }
 
 type WorkloadYAMLRequest struct {
@@ -266,6 +272,16 @@ func (adapter *ClusterAdapter) GetClusterSnapshot(request ClusterSnapshotRequest
 	snapshot, err := clustermode.New(collector).Snapshot(ctx)
 	if err != nil {
 		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: collect resources: %w", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(request.Provider), "aws-eks") {
+		providerClient, providerErr := awsprovider.NewEKSClient(ctx, request.Region, request.Profile, request.RoleARN)
+		if providerErr != nil {
+			snapshot.Warnings = append(snapshot.Warnings, clustermode.Warning{Resource: "AWS provider", Message: providerErr.Error()})
+		} else if metadata, metadataErr := providerClient.Metadata(ctx, request.ClusterName, request.Region); metadataErr != nil {
+			snapshot.Warnings = append(snapshot.Warnings, clustermode.Warning{Resource: "AWS provider", Message: metadataErr.Error()})
+		} else {
+			snapshot.Provider = metadata
+		}
 	}
 	return snapshot, nil
 }
