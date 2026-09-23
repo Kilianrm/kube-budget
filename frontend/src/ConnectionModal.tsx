@@ -83,6 +83,17 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
     return context;
   }
 
+  function selectedKubeconfigProvider() {
+    if (source !== "kubeconfig") return undefined;
+    const selectedContext = contexts.find((availableContext) => availableContext.name === context);
+    if (!selectedContext?.server.includes(".eks.amazonaws.com")) return undefined;
+    const clusterName = selectedContext.cluster.startsWith("arn:")
+      ? selectedContext.cluster.split(":cluster/")[1] || connectionDisplayName()
+      : connectionDisplayName();
+    const region = selectedContext.server.match(/\.([a-z0-9-]+)\.eks\.amazonaws\.com/)?.[1] ?? "";
+    return { provider: "aws-eks" as const, clusterName, region, profile: "default", roleArn: "" };
+  }
+
   function clearCommitTimer() {
     if (commitTimer.current !== null) {
       window.clearTimeout(commitTimer.current);
@@ -180,6 +191,8 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
           const [connectedCluster] = await Promise.all([
           connect({
           name: connectionDisplayName(),
+          provider: source === "eks" ? "aws-eks" : undefined,
+          ...selectedKubeconfigProvider(),
           source,
           kubeconfigPath,
           context,

@@ -6,6 +6,7 @@ export const defaultRefreshIntervalMs = 30_000;
 export interface ClusterConnection {
   name: string;
   source: "kubeconfig" | "eks" | "manual";
+  provider?: "aws-eks";
   kubeconfigPath?: string;
   context?: string;
   clusterName?: string;
@@ -39,7 +40,13 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
     // Try to restore connection from localStorage
     try {
       const stored = localStorage.getItem("cluster-connection");
-      return stored ? { refreshIntervalMs: defaultRefreshIntervalMs, ...JSON.parse(stored) } : null;
+      if (!stored) return null;
+      const connection = JSON.parse(stored) as ClusterConnection;
+      const normalizedConnection = normalizeEKSConnection(connection);
+      return {
+        ...normalizedConnection,
+        refreshIntervalMs: normalizedConnection.refreshIntervalMs ?? defaultRefreshIntervalMs,
+      };
     } catch {
       return null;
     }
@@ -68,7 +75,7 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       const result = await testClusterConnection(kubeconfigPath, context);
 
       const connectedCluster: ClusterConnection = {
-        ...connection,
+        ...normalizeEKSConnection(connection),
         kubeconfigPath,
         context,
         connectedAt: result.connectedAt,
@@ -127,6 +134,18 @@ export function ClusterProvider({ children }: { children: ReactNode }) {
       {children}
     </ClusterContext.Provider>
   );
+}
+
+function normalizeEKSConnection(connection: ClusterConnection): ClusterConnection {
+  if (connection.provider !== "aws-eks" && connection.source !== "eks") return connection;
+
+  const contextParts = (connection.context ?? "").match(/^eks\/([^/]+)\/([^/]+)$/);
+  return {
+    ...connection,
+    provider: "aws-eks",
+    clusterName: connection.clusterName || contextParts?.[1],
+    region: connection.region || contextParts?.[2],
+  };
 }
 
 export function useCluster() {

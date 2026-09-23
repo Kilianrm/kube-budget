@@ -94,12 +94,22 @@ export async function getClusterSnapshot(
   kubeconfigPath: string,
   context: string,
   namespace: string,
+  provider?: { name: string; clusterName: string; region: string; profile: string; roleArn: string },
 ): Promise<ClusterSnapshot> {
   if (!window.go?.wails?.ClusterAdapter) {
     throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
   }
 
-  return GetClusterSnapshot(new wails.ClusterSnapshotRequest({ kubeconfigPath, context, namespace }));
+  return GetClusterSnapshot(new wails.ClusterSnapshotRequest({
+    kubeconfigPath,
+    context,
+    namespace,
+    provider: provider?.name ?? "",
+    clusterName: provider?.clusterName ?? "",
+    region: provider?.region ?? "",
+    profile: provider?.profile ?? "",
+    roleArn: provider?.roleArn ?? "",
+  }));
 }
 
 export async function getWorkloadYAML(
