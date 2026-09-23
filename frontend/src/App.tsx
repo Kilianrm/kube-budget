@@ -24,6 +24,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Server,
   ServerCog,
   SlidersHorizontal,
   UploadCloud,
@@ -78,7 +79,7 @@ const providerCatalog: Record<Provider, Record<string, string[]>> = {
 
 type ResultTab = "overview" | "resources" | "source";
 type AppSection = "estimate" | "cluster" | "optimization";
-type ClusterView = "overview" | "workloads" | "resources" | "cost" | "namespaces" | "nodes";
+type ClusterView = "overview" | "workloads" | "resources" | "cost" | "namespaces" | "nodes" | "provider";
 type WorkloadFilter = "all" | "incomplete" | "incomplete-application" | "incomplete-system";
 
 function formatMoney(value: number, currency = "USD") {
@@ -112,6 +113,9 @@ function AppContent() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const connectionPlatform = clusterConnection?.provider === "aws-eks"
+    ? { label: "EKS", accessibleLabel: "Amazon EKS", className: "aws", icon: <Cloud size={15} /> }
+    : { label: "LOCAL", accessibleLabel: "Local or on-premises Kubernetes", className: "local", icon: <Server size={15} /> };
 
   // Auto-switch to cluster mode when cluster is connected
   useEffect(() => {
@@ -270,7 +274,12 @@ function AppContent() {
           onClick={() => setIsModalOpen(true)}
           title={isConnected() ? `Connected to ${clusterConnection?.name}` : "Click to connect a cluster"}
         >
-          <Zap size={16} />
+          {isConnected() ? (
+            <span className={`cluster-status-provider ${connectionPlatform.className}`} title={connectionPlatform.accessibleLabel} aria-label={connectionPlatform.accessibleLabel}>
+              {connectionPlatform.icon}
+              <small>{connectionPlatform.label}</small>
+            </span>
+          ) : <Zap size={16} />}
           <span>{isConnected() ? clusterConnection?.name || "Connected" : "Not connected"}</span>
         </button>
       </header>
@@ -541,6 +550,13 @@ function ClusterConnection() {
         clusterConnection.kubeconfigPath ?? "",
         clusterConnection.context,
         clusterConnection.namespace,
+        clusterConnection.provider === "aws-eks" ? {
+          name: "aws-eks",
+          clusterName: clusterConnection.clusterName ?? clusterConnection.name,
+          region: clusterConnection.region ?? "",
+          profile: clusterConnection.profile ?? "default",
+          roleArn: clusterConnection.roleArn ?? "",
+        } : undefined,
       );
       setSnapshot(nextSnapshot);
     } catch (reason) {
@@ -548,7 +564,7 @@ function ClusterConnection() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [clusterConnection?.context, clusterConnection?.kubeconfigPath, clusterConnection?.namespace]);
+  }, [clusterConnection?.context, clusterConnection?.kubeconfigPath, clusterConnection?.namespace, clusterConnection?.provider, clusterConnection?.clusterName, clusterConnection?.name, clusterConnection?.region, clusterConnection?.profile, clusterConnection?.roleArn]);
 
   useEffect(() => {
     if (isConnected()) void refreshSnapshot();
@@ -566,6 +582,12 @@ function ClusterConnection() {
 
     return () => window.clearInterval(intervalId);
   }, [clusterConnection?.refreshIntervalMs, isRefreshing, refreshSnapshot]);
+
+  useEffect(() => {
+    if (!snapshot?.provider && (activeView === "provider" || activeView === "cost")) {
+      setActiveView("overview");
+    }
+  }, [activeView, snapshot?.provider]);
 
   if (!isConnected()) {
     return (
@@ -585,7 +607,8 @@ function ClusterConnection() {
         <ClusterNavButton view="resources" activeView={activeView} onSelect={setActiveView} icon={<Database size={16} />} label="Resources" />
         <ClusterNavButton view="namespaces" activeView={activeView} onSelect={setActiveView} icon={<Layers3 size={16} />} label="Namespaces" />
         <ClusterNavButton view="nodes" activeView={activeView} onSelect={setActiveView} icon={<ServerCog size={16} />} label="Nodes" />
-        <ClusterNavButton view="cost" activeView={activeView} onSelect={setActiveView} icon={<CircleDollarSign size={16} />} label="Cost explorer" />
+        {snapshot?.provider && <ClusterNavButton view="provider" activeView={activeView} onSelect={setActiveView} icon={<Cloud size={16} />} label="Provider" />}
+        {snapshot?.provider && <ClusterNavButton view="cost" activeView={activeView} onSelect={setActiveView} icon={<CircleDollarSign size={16} />} label="Cost explorer" />}
         <div className="cluster-sidebar-spacer" />
       </aside>
       <section className="cluster-management-view">
@@ -599,6 +622,7 @@ function ClusterConnection() {
         {snapshot && activeView === "cost" && <ClusterCostExplorer snapshot={snapshot} />}
         {snapshot && activeView === "namespaces" && <ClusterNamespaces snapshot={snapshot} />}
         {snapshot && activeView === "nodes" && <ClusterNodes snapshot={snapshot} />}
+        {snapshot && activeView === "provider" && <ClusterProviderView snapshot={snapshot} />}
       </section>
       <ConnectionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
     </>
@@ -616,6 +640,7 @@ const clusterViewTitles: Record<ClusterView, { title: string; description: strin
   cost: { title: "Cost explorer", description: "Understand where requested monthly cost is concentrated." },
   namespaces: { title: "Namespaces", description: "Compare workload count and requested cost across namespaces." },
   nodes: { title: "Nodes", description: "Review node readiness and the capacity available to workloads." },
+  provider: { title: "Provider", description: "Review AWS and EKS infrastructure metadata for this cluster." },
 };
 
 function ClusterScreenHeader({ view, snapshot, isRefreshing, onRefresh, manualRefreshEnabled }: { view: ClusterView; snapshot: ClusterSnapshot | null; isRefreshing: boolean; onRefresh: () => void; manualRefreshEnabled: boolean }) {
@@ -688,6 +713,56 @@ function NamespaceBars({ snapshot }: { snapshot: ClusterSnapshot }) {
     const percentage = totalCPU > 0 ? Math.round(namespace.requests.cpuMilli / totalCPU * 100) : 0;
     return <div className="namespace-bar" key={namespace.name}><div><span className="namespace-name">{namespace.name}{isSystemNamespace(namespace.name) && <small className="system-namespace-label">System</small>}</span><strong>{formatCPU(namespace.requests.cpuMilli)}<small>{percentage}% of total</small></strong></div><div className="capacity-track"><span style={{ width: `${percentage}%` }} /></div></div>;
   })}<div className="panel-footnote standalone">Showing the top {Math.min(3, snapshot.namespaces.length)} of {snapshot.namespaces.length} namespaces by requested CPU.</div></div>;
+}
+
+function ClusterProviderView({ snapshot }: { snapshot: ClusterSnapshot }) {
+  const provider = snapshot.provider;
+  if (!provider) {
+    return <div className="cluster-screen-content"><section className="cluster-panel"><div className="panel-footnote">No cloud-provider metadata is available for this connection.</div></section></div>;
+  }
+
+  return <div className="cluster-screen-content">
+    <div className="cluster-metrics">
+      <DemoMetric label="Provider" value="AWS / EKS" detail={provider.region || "Region unavailable"} icon={<Cloud size={25} />} tone="good" />
+      <DemoMetric label="Cluster status" value={provider.status || "Unknown"} detail={provider.platformVersion || "Platform version unavailable"} tone={provider.status === "ACTIVE" ? "good" : "warning"} />
+      <DemoMetric label="Node groups" value={String(provider.nodeGroups.length)} detail={`${provider.nodeGroups.reduce((total, group) => total + group.desiredSize, 0)} desired nodes`} />
+      <DemoMetric label="Add-ons" value={String(provider.addons.length)} detail={`${provider.addons.filter((addon) => addon.status === "ACTIVE").length} active`} />
+    </div>
+    <div className="cluster-grid-two">
+      <section className="cluster-panel">
+        <PanelHeading title="Cluster identity" />
+        <dl className="resource-detail-list">
+          <div><dt>Name</dt><dd>{provider.clusterName || "Unknown"}</dd></div>
+          <div><dt>Kubernetes version</dt><dd>{provider.kubernetesVersion || "Unknown"}</dd></div>
+          <div><dt>Platform version</dt><dd>{provider.platformVersion || "Unknown"}</dd></div>
+          <div><dt>AWS account</dt><dd>{provider.accountId || "Unavailable"}</dd></div>
+          <div><dt>Region</dt><dd>{provider.region || "Unknown"}</dd></div>
+          <div><dt>Endpoint access</dt><dd>{provider.endpointAccess || "Unknown"}</dd></div>
+          <div><dt>Authentication</dt><dd>{provider.authenticationMode || "Unknown"}</dd></div>
+          <div><dt>VPC</dt><dd>{provider.vpcId || "Unavailable"}</dd></div>
+        </dl>
+      </section>
+      <section className="cluster-panel">
+        <PanelHeading title="Network" />
+        <div className="detail-card-block">
+          <h3>Subnets</h3>
+          <ul>{provider.subnetIds.length > 0 ? provider.subnetIds.map((subnet) => <li key={subnet}><strong>{subnet}</strong><span>Attached</span></li>) : <li><strong>Unavailable</strong><span>No data returned</span></li>}</ul>
+        </div>
+        <div className="detail-card-block">
+          <h3>Security groups</h3>
+          <ul>{provider.securityGroupIds.length > 0 ? provider.securityGroupIds.map((group) => <li key={group}><strong>{group}</strong><span>Attached</span></li>) : <li><strong>Unavailable</strong><span>No data returned</span></li>}</ul>
+        </div>
+      </section>
+    </div>
+    <section className="cluster-panel">
+      <PanelHeading title="Managed node groups" />
+      <div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Name</th><th>Status</th><th>Instances</th><th>Capacity</th><th>Size</th></tr></thead><tbody>{provider.nodeGroups.length > 0 ? provider.nodeGroups.map((group) => <tr key={group.name}><td><strong>{group.name}</strong></td><td><span className={group.status === "ACTIVE" ? "status-good" : "status-warning"}>{group.status || "Unknown"}</span></td><td>{group.instanceTypes.join(", ") || "Unknown"}</td><td>{group.capacityType || "Unknown"}</td><td>{group.desiredSize} desired / {group.minSize}-{group.maxSize}</td></tr>) : <tr><td colSpan={5}>No managed node groups returned.</td></tr>}</tbody></table></div>
+    </section>
+    <section className="cluster-panel">
+      <PanelHeading title="EKS add-ons" />
+      <div className="cluster-table-wrap"><table className="cluster-table"><thead><tr><th>Name</th><th>Version</th><th>Status</th><th>Health</th></tr></thead><tbody>{provider.addons.length > 0 ? provider.addons.map((addon) => <tr key={addon.name}><td><strong>{addon.name}</strong></td><td>{addon.version || "Unknown"}</td><td><span className={addon.status === "ACTIVE" ? "status-good" : "status-warning"}>{addon.status || "Unknown"}</span></td><td>{addon.health || "Unknown"}</td></tr>) : <tr><td colSpan={4}>No EKS add-ons returned.</td></tr>}</tbody></table></div>
+    </section>
+  </div>;
 }
 
 function ClusterWorkloads({ snapshot, filter, onFilterChange, onRefresh, isRefreshing, manualRefreshEnabled }: { snapshot: ClusterSnapshot; filter: WorkloadFilter; onFilterChange: (filter: WorkloadFilter) => void; onRefresh: () => void; isRefreshing: boolean; manualRefreshEnabled: boolean }) {
@@ -1222,7 +1297,39 @@ function resourcePriority(resource: { status: string; requests: { cpuMilli: numb
 }
 
 function ClusterCostExplorer({ snapshot }: { snapshot: ClusterSnapshot }) {
-  return <div className="cluster-screen-content"><div className="cluster-metrics"><DemoMetric label="Requested monthly cost" value="Unavailable" detail="Pricing is not configured" /><DemoMetric label="CPU requested" value={formatCPU(snapshot.summary.requests.cpuMilli)} detail={`Across ${snapshot.summary.workloadCount} workloads`} /><DemoMetric label="Memory requested" value={formatBytes(snapshot.summary.requests.memoryBytes)} detail="Declared workload requests" /><DemoMetric label="Incomplete requests" value={String(snapshot.summary.missingRequestWorkloads)} detail="Require review before pricing" tone={snapshot.summary.missingRequestWorkloads > 0 ? "warning" : "good"} /></div><section className="cluster-panel"><PanelHeading title="Pricing not configured" /><div className="panel-footnote"><CircleDollarSign size={14} /> Live resources are collected. A pricing selection must be added before requested costs can be calculated.</div></section><section className="cluster-panel"><PanelHeading title="CPU requests by namespace" /><NamespaceBars snapshot={snapshot} /></section></div>;
+  const provider = snapshot.provider;
+  if (!provider) return null;
+
+  const nodeEstimate = provider.nodeGroups.reduce((total, nodeGroup) => {
+    const hourlyRate = nodeGroup.instanceTypes.map((instanceType) => awsNodeHourlyRate(provider.region, instanceType)).find((rate) => rate !== null);
+    return total + (hourlyRate ?? 0) * nodeGroup.desiredSize;
+  }, 0);
+  const knownNodeGroups = provider.nodeGroups.filter((nodeGroup) => nodeGroup.instanceTypes.some((instanceType) => awsNodeHourlyRate(provider.region, instanceType) !== null));
+  const hasUnknownPricing = knownNodeGroups.length !== provider.nodeGroups.length;
+  const monthlyNodeEstimate = nodeEstimate * 730;
+
+  return <div className="cluster-screen-content">
+    <div className="cluster-metrics">
+      <DemoMetric label="Estimated worker cost" value={nodeEstimate > 0 ? formatMoney(nodeEstimate, "USD") : "Unavailable"} detail="Per hour, worker nodes only" tone={nodeEstimate > 0 ? "good" : "warning"} />
+      <DemoMetric label="Estimated monthly nodes" value={monthlyNodeEstimate > 0 ? formatMoney(monthlyNodeEstimate, "USD") : "Unavailable"} detail="730-hour pricing assumption" />
+      <DemoMetric label="CPU requested" value={formatCPU(snapshot.summary.requests.cpuMilli)} detail={`Across ${snapshot.summary.workloadCount} workloads`} />
+      <DemoMetric label="Memory requested" value={formatBytes(snapshot.summary.requests.memoryBytes)} detail="Declared workload requests" />
+    </div>
+    <section className="cluster-panel">
+      <PanelHeading title="EKS worker cost basis" />
+      <div className="panel-footnote"><CircleDollarSign size={14} /> Estimates use the repository's AWS pricing snapshots and include worker nodes only. EKS control plane, EBS, load balancers, NAT gateways, and data transfer are not included.</div>
+      {hasUnknownPricing && <div className="panel-footnote">Some node-group instance types do not have a pricing snapshot for {provider.region || "this region"}.</div>}
+    </section>
+    <section className="cluster-panel"><PanelHeading title="CPU requests by namespace" /><NamespaceBars snapshot={snapshot} /></section>
+  </div>;
+}
+
+function awsNodeHourlyRate(region: string, instanceType: string): number | null {
+  const rates: Record<string, Record<string, number>> = {
+    "us-east-1": { "t3.medium": 0.0416, "m6i.large": 0.096, "m6i.xlarge": 0.192, "c6i.large": 0.085 },
+    "eu-west-1": { "t3.medium": 0.0464, "m6i.large": 0.113, "m6i.xlarge": 0.226, "c6i.large": 0.096 },
+  };
+  return rates[region]?.[instanceType] ?? null;
 }
 
 function CostLine({ icon, label, value, width }: { icon: React.ReactNode; label: string; value: string; width: string }) {

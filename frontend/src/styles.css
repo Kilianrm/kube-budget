@@ -246,6 +246,10 @@ h3 { margin: 0; letter-spacing: 0; }
 .cluster-status-button.connected:hover { background: #dce8f5; }
 .cluster-status-button svg { color: currentColor; }
 .cluster-status-button span { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cluster-status-button .cluster-status-provider { min-width: 50px; height: 24px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex: 0 0 auto; padding: 0 6px; border-radius: 4px; }
+.cluster-status-button .cluster-status-provider small { max-width: none; overflow: visible; color: inherit; font-family: "IBM Plex Mono", monospace; font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.cluster-status-button .cluster-status-provider.aws { color: var(--green-dark); background: var(--green-soft); }
+.cluster-status-button .cluster-status-provider.local { color: var(--blue-dark); background: #dceaf6; }
 
 /* Modal dialog styles */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); animation: fade-in .25s ease-out both; z-index: 999; }
