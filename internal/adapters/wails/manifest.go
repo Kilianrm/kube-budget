@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"kube-budget/core/costmodel"
 	manifestmode "kube-budget/internal/application/manifest"
 	"kube-budget/internal/providers"
-)
-
-const (
-	hoursPerDay  = 24
-	daysPerMonth = 30
 )
 
 // ManifestAdapter exposes Manifest Mode to the desktop frontend.
@@ -33,14 +29,17 @@ type ManifestDocument struct {
 
 // ManifestResult is the presentation-neutral result returned to the frontend.
 type ManifestResult struct {
-	Workload     WorkloadResult `json:"workload"`
-	Pricing      PricingResult  `json:"pricing"`
-	HourlyTotal  float64        `json:"hourlyTotal"`
-	DailyTotal   float64        `json:"dailyTotal"`
-	MonthlyTotal float64        `json:"monthlyTotal"`
-	Currency     string         `json:"currency"`
-	MinTotal     *float64       `json:"minTotal,omitempty"`
-	MaxTotal     *float64       `json:"maxTotal,omitempty"`
+	Workload     WorkloadResult        `json:"workload"`
+	Pricing      PricingResult         `json:"pricing"`
+	Cost         costmodel.Projection  `json:"cost"`
+	HourlyTotal  float64               `json:"hourlyTotal"`
+	DailyTotal   float64               `json:"dailyTotal"`
+	MonthlyTotal float64               `json:"monthlyTotal"`
+	Currency     string                `json:"currency"`
+	MinTotal     *float64              `json:"minTotal,omitempty"`
+	MaxTotal     *float64              `json:"maxTotal,omitempty"`
+	MinCost      *costmodel.Projection `json:"minCost,omitempty"`
+	MaxCost      *costmodel.Projection `json:"maxCost,omitempty"`
 }
 
 // WorkloadResult contains workload identity and resource requests for display.
@@ -121,6 +120,8 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 		})
 	}
 
+	cost := costmodel.Project(result.Estimate.Total)
+
 	return ManifestResult{
 		Workload: WorkloadResult{
 			Name:        result.Workload.Name,
@@ -135,11 +136,22 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 			Region:       region,
 			InstanceType: instanceType,
 		},
-		HourlyTotal:  result.Estimate.Total,
-		DailyTotal:   result.Estimate.Total * hoursPerDay,
-		MonthlyTotal: result.Estimate.Total * hoursPerDay * daysPerMonth,
+		Cost:         cost,
+		HourlyTotal:  cost.Hourly,
+		DailyTotal:   cost.Daily,
+		MonthlyTotal: cost.Monthly,
 		Currency:     result.Estimate.Currency,
 		MinTotal:     result.Estimate.MinTotal,
 		MaxTotal:     result.Estimate.MaxTotal,
+		MinCost:      projectBound(result.Estimate.MinTotal),
+		MaxCost:      projectBound(result.Estimate.MaxTotal),
 	}, nil
+}
+
+func projectBound(hourlyUSD *float64) *costmodel.Projection {
+	if hourlyUSD == nil {
+		return nil
+	}
+	projection := costmodel.Project(*hourlyUSD)
+	return &projection
 }

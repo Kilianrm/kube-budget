@@ -6,6 +6,14 @@ export function GetClusterSnapshot(arg1) {
   return window['go']['wails']['ClusterAdapter']['GetClusterSnapshot'](arg1);
 }
 
+export function GetCostReport(arg1) {
+  return window['go']['wails']['ClusterAdapter']['GetCostReport'](arg1);
+}
+
+export function GetCostTrend(arg1) {
+  return window['go']['wails']['ClusterAdapter']['GetCostTrend'](arg1);
+}
+
 export function GetWorkloadYAML(arg1) {
   return window['go']['wails']['ClusterAdapter']['GetWorkloadYAML'](arg1);
 }

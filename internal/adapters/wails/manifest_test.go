@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"kube-budget/core/costmodel"
 	"kube-budget/internal/providers"
 )
 
@@ -35,8 +36,11 @@ func TestEstimateManifestReturnsUIResult(t *testing.T) {
 	if len(result.Workload.Resources) != 1 || result.Workload.Resources[0].Name != "api" {
 		t.Errorf("EstimateManifest().Workload.Resources = %#v, want api resource", result.Workload.Resources)
 	}
-	if result.HourlyTotal <= 0 || result.DailyTotal != result.HourlyTotal*24 || result.MonthlyTotal != result.DailyTotal*30 {
-		t.Errorf("EstimateManifest() totals = hourly %v, daily %v, monthly %v", result.HourlyTotal, result.DailyTotal, result.MonthlyTotal)
+	if result.HourlyTotal <= 0 || result.Cost != costmodel.Project(result.HourlyTotal) {
+		t.Errorf("EstimateManifest() cost = %+v, want projection of hourly %v", result.Cost, result.HourlyTotal)
+	}
+	if result.DailyTotal != result.Cost.Daily || result.MonthlyTotal != result.Cost.Monthly {
+		t.Errorf("EstimateManifest() totals = daily %v, monthly %v, want %v/%v", result.DailyTotal, result.MonthlyTotal, result.Cost.Daily, result.Cost.Monthly)
 	}
 	if result.Currency != "USD" {
 		t.Errorf("EstimateManifest().Currency = %q, want USD", result.Currency)
