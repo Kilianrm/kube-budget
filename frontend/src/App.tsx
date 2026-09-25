@@ -34,6 +34,7 @@ import {
 import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ClusterProvider, useCluster } from "./ClusterContext";
 import { ConnectionModal } from "./ConnectionModal";
+import { CostSection } from "./CostSection";
 import { EstimationHistoryProvider, useEstimationHistory, SavedEstimation } from "./EstimationHistory";
 import { EstimationRegistry } from "./HistoryPanel";
 
@@ -78,8 +79,8 @@ const providerCatalog: Record<Provider, Record<string, string[]>> = {
 };
 
 type ResultTab = "overview" | "resources" | "source";
-type AppSection = "estimate" | "cluster" | "optimization";
-type ClusterView = "overview" | "workloads" | "resources" | "cost" | "namespaces" | "nodes" | "provider";
+type AppSection = "estimate" | "cluster" | "cost";
+type ClusterView = "overview" | "workloads" | "resources" | "namespaces" | "nodes" | "provider";
 type WorkloadFilter = "all" | "incomplete" | "incomplete-application" | "incomplete-system";
 
 function formatMoney(value: number, currency = "USD") {
@@ -234,12 +235,12 @@ function AppContent() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className={`brand-mark ${activeSection === "cluster" ? "cluster" : activeSection === "optimization" ? "optimization" : ""}`} aria-hidden="true">
+          <div className={`brand-mark ${activeSection === "cluster" ? "cluster" : activeSection === "cost" ? "optimization" : ""}`} aria-hidden="true">
             {activeSection === "estimate" ? <CircleDollarSign size={21} /> : activeSection === "cluster" ? <Network size={21} /> : <Lightbulb size={21} />}
           </div>
           <div>
             <strong>KubeBudget</strong>
-            <span>{activeSection === "estimate" ? "Manifest workspace" : activeSection === "cluster" ? "Cluster workspace" : "Optimization workspace"}</span>
+            <span>{activeSection === "estimate" ? "Manifest workspace" : activeSection === "cluster" ? "Cluster workspace" : "Cost workspace"}</span>
           </div>
         </div>
         <nav className="primary-nav" aria-label="Main sections">
@@ -261,11 +262,11 @@ function AppContent() {
           </button>
           <button
             type="button"
-            className={activeSection === "optimization" ? "active optimization" : ""}
-            onClick={() => setActiveSection("optimization")}
-            aria-current={activeSection === "optimization" ? "page" : undefined}
+            className={activeSection === "cost" ? "active optimization" : ""}
+            onClick={() => setActiveSection("cost")}
+            aria-current={activeSection === "cost" ? "page" : undefined}
           >
-            <Lightbulb size={16} /> Optimization
+            <Lightbulb size={16} /> Cost
           </button>
         </nav>
         <button
@@ -292,8 +293,8 @@ function AppContent() {
           <button type="button" className={estimateView === "estimator" ? "active" : ""} onClick={() => setEstimateView("estimator")}><Gauge size={17} /><span>Estimator</span></button>
           <button type="button" className={estimateView === "registry" ? "active" : ""} onClick={() => setEstimateView("registry")}><Clock size={17} /><span>Saved estimates</span></button>
         </aside>}
-        <div className={`app-main ${activeSection === "cluster" ? "cluster-app-main" : ""}`}>
-      {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "optimization" ? <OptimizationPanel /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace ${result ? "has-result" : "manifest-stage"}`}>
+        <div className={`app-main ${activeSection === "cluster" || activeSection === "cost" ? "cluster-app-main" : ""}`}>
+      {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "cost" ? <CostSection onConnectClick={() => setIsModalOpen(true)} /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace ${result ? "has-result" : "manifest-stage"}`}>
         <aside className="input-pane">
           <div className="pane-heading">
             <div><span className="step-label">01 / INPUT</span><h1>Manifest</h1></div>
@@ -584,7 +585,7 @@ function ClusterConnection() {
   }, [clusterConnection?.refreshIntervalMs, isRefreshing, refreshSnapshot]);
 
   useEffect(() => {
-    if (!snapshot?.provider && (activeView === "provider" || activeView === "cost")) {
+    if (!snapshot?.provider && activeView === "provider") {
       setActiveView("overview");
     }
   }, [activeView, snapshot?.provider]);
@@ -608,7 +609,6 @@ function ClusterConnection() {
         <ClusterNavButton view="namespaces" activeView={activeView} onSelect={setActiveView} icon={<Layers3 size={16} />} label="Namespaces" />
         <ClusterNavButton view="nodes" activeView={activeView} onSelect={setActiveView} icon={<ServerCog size={16} />} label="Nodes" />
         {snapshot?.provider && <ClusterNavButton view="provider" activeView={activeView} onSelect={setActiveView} icon={<Cloud size={16} />} label="Provider" />}
-        {snapshot?.provider && <ClusterNavButton view="cost" activeView={activeView} onSelect={setActiveView} icon={<CircleDollarSign size={16} />} label="Cost explorer" />}
         <div className="cluster-sidebar-spacer" />
       </aside>
       <section className="cluster-management-view">
@@ -619,7 +619,6 @@ function ClusterConnection() {
         {snapshot && activeView === "overview" && <ClusterOverview snapshot={snapshot} onNavigate={setActiveView} onShowWorkloads={(filter) => { setWorkloadFilter(filter); setActiveView("workloads"); }} />}
         {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} filter={workloadFilter} onFilterChange={setWorkloadFilter} onRefresh={refreshSnapshot} isRefreshing={isRefreshing} manualRefreshEnabled={manualRefreshEnabled} />}
         {snapshot && activeView === "resources" && <ClusterResources snapshot={snapshot} />}
-        {snapshot && activeView === "cost" && <ClusterCostExplorer snapshot={snapshot} />}
         {snapshot && activeView === "namespaces" && <ClusterNamespaces snapshot={snapshot} />}
         {snapshot && activeView === "nodes" && <ClusterNodes snapshot={snapshot} />}
         {snapshot && activeView === "provider" && <ClusterProviderView snapshot={snapshot} />}
@@ -637,7 +636,6 @@ const clusterViewTitles: Record<ClusterView, { title: string; description: strin
   overview: { title: "Cluster overview", description: "A high-level view of health, capacity, and requested cost." },
   workloads: { title: "Workloads", description: "Inspect the workloads that make up this cluster's requested capacity." },
   resources: { title: "Resources", description: "Inspect batch, networking, storage, configuration, and policy resources." },
-  cost: { title: "Cost explorer", description: "Understand where requested monthly cost is concentrated." },
   namespaces: { title: "Namespaces", description: "Compare workload count and requested cost across namespaces." },
   nodes: { title: "Nodes", description: "Review node readiness and the capacity available to workloads." },
   provider: { title: "Provider", description: "Review AWS and EKS infrastructure metadata for this cluster." },
@@ -1296,46 +1294,6 @@ function resourcePriority(resource: { status: string; requests: { cpuMilli: numb
   return score;
 }
 
-function ClusterCostExplorer({ snapshot }: { snapshot: ClusterSnapshot }) {
-  const provider = snapshot.provider;
-  if (!provider) return null;
-
-  const nodeEstimate = provider.nodeGroups.reduce((total, nodeGroup) => {
-    const hourlyRate = nodeGroup.instanceTypes.map((instanceType) => awsNodeHourlyRate(provider.region, instanceType)).find((rate) => rate !== null);
-    return total + (hourlyRate ?? 0) * nodeGroup.desiredSize;
-  }, 0);
-  const knownNodeGroups = provider.nodeGroups.filter((nodeGroup) => nodeGroup.instanceTypes.some((instanceType) => awsNodeHourlyRate(provider.region, instanceType) !== null));
-  const hasUnknownPricing = knownNodeGroups.length !== provider.nodeGroups.length;
-  const monthlyNodeEstimate = nodeEstimate * 730;
-
-  return <div className="cluster-screen-content">
-    <div className="cluster-metrics">
-      <DemoMetric label="Estimated worker cost" value={nodeEstimate > 0 ? formatMoney(nodeEstimate, "USD") : "Unavailable"} detail="Per hour, worker nodes only" tone={nodeEstimate > 0 ? "good" : "warning"} />
-      <DemoMetric label="Estimated monthly nodes" value={monthlyNodeEstimate > 0 ? formatMoney(monthlyNodeEstimate, "USD") : "Unavailable"} detail="730-hour pricing assumption" />
-      <DemoMetric label="CPU requested" value={formatCPU(snapshot.summary.requests.cpuMilli)} detail={`Across ${snapshot.summary.workloadCount} workloads`} />
-      <DemoMetric label="Memory requested" value={formatBytes(snapshot.summary.requests.memoryBytes)} detail="Declared workload requests" />
-    </div>
-    <section className="cluster-panel">
-      <PanelHeading title="EKS worker cost basis" />
-      <div className="panel-footnote"><CircleDollarSign size={14} /> Estimates use the repository's AWS pricing snapshots and include worker nodes only. EKS control plane, EBS, load balancers, NAT gateways, and data transfer are not included.</div>
-      {hasUnknownPricing && <div className="panel-footnote">Some node-group instance types do not have a pricing snapshot for {provider.region || "this region"}.</div>}
-    </section>
-    <section className="cluster-panel"><PanelHeading title="CPU requests by namespace" /><NamespaceBars snapshot={snapshot} /></section>
-  </div>;
-}
-
-function awsNodeHourlyRate(region: string, instanceType: string): number | null {
-  const rates: Record<string, Record<string, number>> = {
-    "us-east-1": { "t3.medium": 0.0416, "m6i.large": 0.096, "m6i.xlarge": 0.192, "c6i.large": 0.085 },
-    "eu-west-1": { "t3.medium": 0.0464, "m6i.large": 0.113, "m6i.xlarge": 0.226, "c6i.large": 0.096 },
-  };
-  return rates[region]?.[instanceType] ?? null;
-}
-
-function CostLine({ icon, label, value, width }: { icon: React.ReactNode; label: string; value: string; width: string }) {
-  return <div className="cost-line"><div><span className="cost-line-icon">{icon}</span><span>{label}</span><strong>{value}</strong></div><div className="capacity-track"><span style={{ width }} /></div></div>;
-}
-
 function ClusterNamespaces({ snapshot }: { snapshot: ClusterSnapshot }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [issueFilter, setIssueFilter] = useState<"all" | "missing-requests" | "high-pressure">("all");
@@ -1646,41 +1604,11 @@ function formatResourceAttributes(attributes: Record<string, string>) {
   return entries.length > 0 ? entries.map(([name, value]) => `${name}: ${value}`).join("  ") : "No additional details";
 }
 
-function OptimizationPanel() {
-  return (
-    <section className="optimization-workspace">
-      <div className="optimization-content">
-        <div className="optimization-visual" aria-hidden="true">
-          <div className="optimization-icon"><Lightbulb size={48} /></div>
-        </div>
-        <h2>Optimization features</h2>
-        <p>Discover recommendations to optimize your Kubernetes workloads and reduce costs.</p>
-        <div className="empty-state">
-          <div className="empty-visual" aria-hidden="true">
-            <div className="visual-node visual-main"><Lightbulb size={27} /></div>
-            <div className="visual-node visual-one"><Gauge size={18} /></div>
-            <div className="visual-node visual-two"><Layers3 size={18} /></div>
-            <div className="visual-node visual-three"><ServerCog size={18} /></div>
-            <span className="connector connector-one" /><span className="connector connector-two" /><span className="connector connector-three" />
-          </div>
-          <h3>Optimization recommendations coming soon</h3>
-          <p>Get actionable insights to optimize your Kubernetes clusters for better performance and reduced costs.</p>
-          <div className="empty-capabilities">
-            <span><Check size={14} /> Resource optimization</span>
-            <span><Check size={14} /> Cost reduction tips</span>
-            <span><Check size={14} /> Performance insights</span>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function Overview({ result }: { result: ManifestResult }) {
   return (
     <div className="overview-view">
       <section className="total-band">
-        <div><span>Estimated monthly cost</span><strong>{formatMoney(result.monthlyTotal, result.currency)}</strong><small>30-day projection from resource requests</small></div>
+        <div><span>Estimated monthly cost</span><strong>{formatMoney(result.monthlyTotal, result.currency)}</strong><small>730-hour run rate from resource requests</small></div>
         <div className="cost-pulse"><CircleDollarSign size={28} /></div>
       </section>
 

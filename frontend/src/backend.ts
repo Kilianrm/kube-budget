@@ -2,12 +2,14 @@ import { EstimateManifest } from "../wailsjs/go/wails/ManifestAdapter";
 import {
   GetClusterSnapshot,
 	GetWorkloadYAML,
+  GetCostReport,
+  GetCostTrend,
   ListKubeconfigContexts,
   ListEKSClusters,
   PrepareEKSConnection,
   TestConnection,
 } from "../wailsjs/go/wails/ClusterAdapter";
-import { cluster, wails } from "../wailsjs/go/models";
+import { cluster, costmodel, costseries, optimize, wails } from "../wailsjs/go/models";
 
 export interface ManifestRequest {
   documents: Array<{
@@ -29,6 +31,13 @@ export type ManifestResult = wails.ManifestResult;
 export type ClusterContext = wails.KubeconfigContext;
 export type ClusterConnectionResult = wails.ClusterConnectionResult;
 export type ClusterSnapshot = cluster.Snapshot;
+export type CostReport = costmodel.CostReport;
+export type CostLineItem = costmodel.LineItem;
+export type CostProjection = costmodel.Projection;
+export type CostReportResult = wails.CostReportResult;
+export type CostRecommendation = optimize.Recommendation;
+export type CostTrend = costseries.Series;
+export type CostTrendPoint = costseries.Point;
 
 declare global {
   interface Window {
@@ -110,6 +119,40 @@ export async function getClusterSnapshot(
     profile: provider?.profile ?? "",
     roleArn: provider?.roleArn ?? "",
   }));
+}
+
+export async function getCostReport(
+  kubeconfigPath: string,
+  context: string,
+  namespace: string,
+  provider?: { name: string; clusterName: string; region: string; profile: string; roleArn: string },
+  pricing?: { provider?: string; region?: string; instanceType?: string },
+): Promise<CostReportResult> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return GetCostReport(new wails.CostReportRequest({
+    kubeconfigPath,
+    context,
+    namespace,
+    provider: provider?.name ?? "",
+    clusterName: provider?.clusterName ?? "",
+    region: provider?.region ?? "",
+    profile: provider?.profile ?? "",
+    roleArn: provider?.roleArn ?? "",
+    pricingProvider: pricing?.provider ?? "",
+    pricingRegion: pricing?.region ?? "",
+    instanceType: pricing?.instanceType ?? "",
+  }));
+}
+
+export async function getCostTrend(clusterId: string, days: number, bucket: "hour" | "day"): Promise<CostTrend> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return GetCostTrend(new wails.CostTrendRequest({ clusterId, days, bucket }));
 }
 
 export async function getWorkloadYAML(
