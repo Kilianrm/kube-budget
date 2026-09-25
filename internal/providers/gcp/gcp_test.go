@@ -16,8 +16,9 @@ func TestNewPriceConfigForRegion(t *testing.T) {
 	if config.MemoryUSDPerGB != 0.0041875 {
 		t.Errorf("MemoryUSDPerGB = %v, want 0.0041875", config.MemoryUSDPerGB)
 	}
-	if config.StorageUSDPerGB != 0.04/730 {
-		t.Errorf("StorageUSDPerGB = %v, want %v", config.StorageUSDPerGB, 0.04/730)
+	wantStorage := float64(0.04) / float64(730)
+	if config.StorageUSDPerGB != wantStorage {
+		t.Errorf("StorageUSDPerGB = %v, want %v", config.StorageUSDPerGB, wantStorage)
 	}
 }
 
