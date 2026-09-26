@@ -2,6 +2,7 @@ package optimize
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,24 +13,39 @@ func nearly(got, want float64) bool {
 	return math.Abs(got-want) < 1e-9
 }
 
-func node(name string, hourly float64, ready, schedulable bool, purchase string, cores, memoryGB float64) costmodel.LineItem {
+// node is a priced node of machine type "m" (2 vCPU, 8 GB) unless changed.
+func node(name string, hourly float64, purchase string) costmodel.LineItem {
 	return costmodel.LineItem{
-		Subject:    costmodel.Subject{Kind: costmodel.SubjectNode, ID: name, Name: name},
+		Subject:    costmodel.Subject{Kind: costmodel.SubjectNode, ID: name, Name: name, ParentID: "general"},
 		Basis:      costmodel.BasisProvisioned,
-		Usage:      costmodel.Usage{CPUCores: cores, MemoryGB: memoryGB},
+		Usage:      costmodel.Usage{CPUCores: 2, MemoryGB: 8},
 		HourlyUSD:  hourly,
+		Components: map[costmodel.Component]float64{costmodel.ComponentCPU: hourly / 2, costmodel.ComponentMemory: hourly / 2},
 		Confidence: costmodel.ConfidenceExact,
-		Detail:     map[string]interface{}{"ready": ready, "schedulable": schedulable, "purchase": purchase},
+		Detail:     map[string]interface{}{"machineType": "m", "purchase": purchase, "ready": true, "schedulable": true},
 	}
 }
 
-func workload(name string, hourly, cores, memoryGB float64, confidence costmodel.Confidence) costmodel.LineItem {
+func nodes(count int, hourly float64) []costmodel.LineItem {
+	items := make([]costmodel.LineItem, 0, count)
+	for index := 0; index < count; index++ {
+		items = append(items, node(string(rune('a'+index)), hourly, "on-demand"))
+	}
+	return items
+}
+
+// workload requests cpu cores and memory GB priced at 0.01 per core and per GB.
+func workload(name, kind string, cpu, memory float64, used *costmodel.Usage) costmodel.LineItem {
 	return costmodel.LineItem{
-		Subject:    costmodel.Subject{Kind: costmodel.SubjectWorkload, ID: name, Name: name, Namespace: "prod"},
-		Basis:      costmodel.BasisRequested,
-		Usage:      costmodel.Usage{CPUCores: cores, MemoryGB: memoryGB},
-		HourlyUSD:  hourly,
-		Confidence: confidence,
+		Subject:        costmodel.Subject{Kind: costmodel.SubjectWorkload, ID: name, Name: name, Namespace: "prod"},
+		Basis:          costmodel.BasisRequested,
+		Usage:          costmodel.Usage{CPUCores: cpu, MemoryGB: memory},
+		HourlyUSD:      cpu*0.01 + memory*0.01,
+		Components:     map[costmodel.Component]float64{costmodel.ComponentCPU: cpu * 0.01, costmodel.ComponentMemory: memory * 0.01},
+		Confidence:     costmodel.ConfidenceDerived,
+		Used:           used,
+		UsedComponents: map[costmodel.Component]float64{},
+		Detail:         map[string]interface{}{"kind": kind, "containers": 1, "replicas": 1.0},
 	}
 }
 
@@ -37,154 +53,300 @@ func reportOf(items ...costmodel.LineItem) costmodel.CostReport {
 	return costmodel.NewReport(time.Unix(0, 0), costmodel.Scope{}, items, nil)
 }
 
-func find(recommendations []Recommendation, id string) *Recommendation {
-	for index := range recommendations {
-		if recommendations[index].ID == id {
-			return &recommendations[index]
+func find(plan Plan, id string) *Recommendation {
+	for _, list := range [][]Recommendation{plan.Recommendations, plan.DataIssues} {
+		for index := range list {
+			if list[index].ID == id {
+				return &list[index]
+			}
 		}
 	}
 	return nil
 }
 
-func TestAnalyzeRanksBlockersFirst(t *testing.T) {
-	report := reportOf(
-		node("node-1", 0.20, false, true, "on-demand", 4, 16),
-		workload("legacy", 0, 0, 0, costmodel.ConfidenceUnknown),
-	)
+// Consolidation and rightsizing both want to remove nodes. The plan must
+// count each node once: rightsizing only claims nodes consolidation left.
+func TestPlanNeverCountsTheSameNodeTwice(t *testing.T) {
+	items := append(nodes(4, 0.1), workload("api", "Deployment", 2, 4, &costmodel.Usage{CPUCores: 0.2, MemoryGB: 3.5}))
 
-	recommendations := Analyze(report)
+	plan := Build(reportOf(items...), Inputs{})
 
-	if len(recommendations) == 0 {
-		t.Fatal("Analyze() returned nothing")
+	consolidate := find(plan, "consolidate-nodes")
+	if consolidate == nil || !nearly(consolidate.Savings.Hourly, 0.2) {
+		t.Fatalf("consolidate = %+v, want 2 of 4 nodes removed (0.2/h)", consolidate)
 	}
-	if recommendations[0].Severity != SeverityBlocker {
-		t.Errorf("first severity = %q, want blocker", recommendations[0].Severity)
+	rightsize := find(plan, "rightsize-requests")
+	if rightsize == nil {
+		t.Fatal("rightsize-requests missing")
 	}
-	if blocker := find(recommendations, "missing-requests"); blocker == nil || blocker.Savings.Hourly != 0 {
-		t.Errorf("missing-requests = %+v, want a blocker with no savings", blocker)
+	// the two remaining nodes are the high-availability floor, so nothing more is billed less
+	if rightsize.Savings.Hourly != 0 || rightsize.FreedRequests.Hourly <= 0 {
+		t.Errorf("rightsize = %v billed / %v freed, want 0 billed and some requests freed", rightsize.Savings.Hourly, rightsize.FreedRequests.Hourly)
 	}
-}
-
-func TestUnusableNodesClaimTheFullNodePrice(t *testing.T) {
-	report := reportOf(
-		node("node-1", 0.20, true, true, "on-demand", 4, 16),
-		node("node-2", 0.20, false, true, "on-demand", 4, 16),
-		node("node-3", 0.20, true, false, "on-demand", 4, 16),
-		workload("api", 0.05, 1, 2, costmodel.ConfidenceDerived),
-	)
-
-	recommendation := find(Analyze(report), "unusable-nodes")
-
-	if recommendation == nil {
-		t.Fatal("no unusable-nodes recommendation")
+	if !nearly(plan.Savings.Hourly, 0.2) || !nearly(plan.Optimized.Hourly, plan.Current.Hourly-0.2) {
+		t.Errorf("plan = %v saved, %v optimized, want 0.2 saved from %v", plan.Savings.Hourly, plan.Optimized.Hourly, plan.Current.Hourly)
 	}
-	if recommendation.Count != 2 {
-		t.Errorf("Count = %d, want 2", recommendation.Count)
-	}
-	if recommendation.Savings.Hourly != 0.4 {
-		t.Errorf("Savings = %v, want 0.4", recommendation.Savings.Hourly)
-	}
-	if recommendation.Savings.Monthly != 0.4*costmodel.HoursPerMonth {
-		t.Errorf("Savings.Monthly = %v, want the 730-hour projection", recommendation.Savings.Monthly)
+	if len(plan.Steps) != 1 || plan.Steps[0].ID != "consolidate-nodes" {
+		t.Errorf("Steps = %+v, want only consolidation in the waterfall", plan.Steps)
 	}
 }
 
-func TestConsolidationProposesFewerNodes(t *testing.T) {
-	report := reportOf(
-		node("node-1", 0.20, true, true, "on-demand", 4, 16),
-		node("node-2", 0.20, true, true, "on-demand", 4, 16),
-		node("node-3", 0.20, true, true, "on-demand", 4, 16),
-		workload("api", 0.05, 2, 8, costmodel.ConfidenceDerived),
-	)
+func TestRightsizingClaimsTheNodesItFrees(t *testing.T) {
+	// 6 nodes; requests of 5 cores need 3 of them, usage of 1 core needs the HA floor of 2
+	items := append(nodes(6, 0.1), workload("api", "Deployment", 5, 4, &costmodel.Usage{CPUCores: 1, MemoryGB: 3}))
 
-	recommendation := find(Analyze(report), "consolidation")
+	plan := Build(reportOf(items...), Inputs{})
 
-	if recommendation == nil {
-		t.Fatal("no consolidation recommendation")
+	if got := find(plan, "consolidate-nodes").Savings.Hourly; !nearly(got, 0.3) {
+		t.Errorf("consolidation = %v, want 3 nodes (0.3/h)", got)
 	}
-	if recommendation.Count != 2 {
-		t.Errorf("removable nodes = %d, want 2", recommendation.Count)
+	rightsize := find(plan, "rightsize-requests")
+	if !nearly(rightsize.Savings.Hourly, 0.1) {
+		t.Errorf("rightsizing = %v, want the one extra node (0.1/h)", rightsize.Savings.Hourly)
 	}
-	if !nearly(recommendation.Savings.Hourly, 0.4) {
-		t.Errorf("Savings = %v, want 0.4", recommendation.Savings.Hourly)
+	if !strings.Contains(rightsize.Items[0].Command, "kubectl set resources deployment/api -n prod --requests=cpu=1500m") {
+		t.Errorf("command = %q, want the new cpu request", rightsize.Items[0].Command)
 	}
-	if !nearly(recommendation.Proposed.Hourly, 0.2) {
-		t.Errorf("Proposed = %v, want 0.2", recommendation.Proposed.Hourly)
+	if strings.Contains(rightsize.Items[0].Command, "memory") {
+		t.Errorf("command = %q, memory is used at 75%% and must stay", rightsize.Items[0].Command)
 	}
 }
 
-// Consolidation must stay silent while the demand side is incomplete.
-func TestConsolidationSkippedWhenRequestsAreMissing(t *testing.T) {
-	report := reportOf(
-		node("node-1", 0.20, true, true, "on-demand", 4, 16),
-		node("node-2", 0.20, true, true, "on-demand", 4, 16),
-		workload("api", 0.05, 1, 2, costmodel.ConfidenceDerived),
-		workload("legacy", 0, 0, 0, costmodel.ConfidenceUnknown),
-	)
+func TestDismissedStepsLeaveTheScenario(t *testing.T) {
+	items := append(nodes(6, 0.1), workload("api", "Deployment", 5, 4, &costmodel.Usage{CPUCores: 1, MemoryGB: 3}))
 
-	if recommendation := find(Analyze(report), "consolidation"); recommendation != nil {
-		t.Errorf("consolidation = %+v, want none while requests are missing", recommendation)
+	plan := Build(reportOf(items...), Inputs{Dismissed: map[string]bool{"consolidate-nodes": true}})
+
+	if consolidate := find(plan, "consolidate-nodes"); consolidate == nil || !consolidate.Dismissed {
+		t.Fatalf("consolidate = %+v, want it listed as dismissed", consolidate)
+	}
+	// without consolidation, rightsizing is what takes the cluster from 6 to 2 nodes
+	if got := find(plan, "rightsize-requests").Savings.Hourly; !nearly(got, 0.4) {
+		t.Errorf("rightsizing = %v, want 4 nodes (0.4/h)", got)
+	}
+	if !nearly(plan.Savings.Hourly, 0.4) {
+		t.Errorf("plan savings = %v, want the dismissed step left out", plan.Savings.Hourly)
 	}
 }
 
-func TestConsolidationSilentWhenCapacityIsNeeded(t *testing.T) {
-	report := reportOf(
-		node("node-1", 0.20, true, true, "on-demand", 4, 16),
-		node("node-2", 0.20, true, true, "on-demand", 4, 16),
-		workload("api", 0.05, 7, 28, costmodel.ConfidenceDerived),
-	)
+func TestMissingRequestsHoldBackNodeSteps(t *testing.T) {
+	legacy := costmodel.LineItem{
+		Subject:    costmodel.Subject{Kind: costmodel.SubjectWorkload, Name: "legacy", Namespace: "prod"},
+		Basis:      costmodel.BasisRequested,
+		Confidence: costmodel.ConfidenceUnknown,
+		Detail:     map[string]interface{}{"kind": "Deployment", "missingRequests": true},
+	}
+	items := append(nodes(6, 0.1), workload("api", "Deployment", 2, 4, &costmodel.Usage{CPUCores: 0.2, MemoryGB: 3}), legacy)
 
-	if recommendation := find(Analyze(report), "consolidation"); recommendation != nil {
-		t.Errorf("consolidation = %+v, want none when the nodes are needed", recommendation)
+	plan := Build(reportOf(items...), Inputs{SpotPriceRatio: 0.35})
+
+	issue := find(plan, "missing-requests")
+	if issue == nil || issue.Category != CategoryData || !strings.Contains(issue.Items[0].Command, "deployment/legacy") {
+		t.Fatalf("missing-requests = %+v, want a data issue with a command template", issue)
+	}
+	for _, id := range []string{"consolidate-nodes", "node-type", "spot-capacity"} {
+		if find(plan, id) != nil {
+			t.Errorf("%s present, want node steps held back while demand is incomplete", id)
+		}
+	}
+	rightsize := find(plan, "rightsize-requests")
+	if rightsize == nil || rightsize.Savings.Hourly != 0 || rightsize.FreedRequests.Hourly <= 0 {
+		t.Errorf("rightsize = %+v, want freed requests but no billed saving", rightsize)
 	}
 }
 
-func TestOrphanVolumesAreFlagged(t *testing.T) {
-	volume := func(name, status string, hourly float64) costmodel.LineItem {
-		return costmodel.LineItem{
-			Subject:    costmodel.Subject{Kind: costmodel.SubjectVolume, ID: name, Name: name},
-			Basis:      costmodel.BasisProvisioned,
-			HourlyUSD:  hourly,
+func TestOrphanVolumesAreBoundClaimsNobodyMounts(t *testing.T) {
+	volume := func(name, status string, mounted *bool) costmodel.LineItem {
+		item := costmodel.LineItem{
+			Subject: costmodel.Subject{Kind: costmodel.SubjectVolume, ID: name, Name: name, Namespace: "prod"},
+			Basis:   costmodel.BasisProvisioned, Usage: costmodel.Usage{StorageGB: 100}, HourlyUSD: 0.01,
+			Components: map[costmodel.Component]float64{costmodel.ComponentStorage: 0.01},
 			Confidence: costmodel.ConfidenceDerived,
 			Detail:     map[string]interface{}{"status": status},
 		}
+		if mounted != nil {
+			item.Detail["mounted"] = *mounted
+		}
+		return item
 	}
-	report := reportOf(volume("data", "Bound", 0.01), volume("stale", "Pending", 0.02))
-
-	recommendation := find(Analyze(report), "orphan-volumes")
-
-	if recommendation == nil || recommendation.Count != 1 {
-		t.Fatalf("orphan-volumes = %+v, want the single unbound claim", recommendation)
-	}
-	if recommendation.Savings.Hourly != 0.02 {
-		t.Errorf("Savings = %v, want 0.02", recommendation.Savings.Hourly)
-	}
-}
-
-// Spot capacity has no price in the report, so the rule must not invent one.
-func TestSpotCandidatesClaimNoSavings(t *testing.T) {
-	report := reportOf(node("node-1", 0.20, true, true, "on-demand", 4, 16))
-
-	recommendation := find(Analyze(report), "spot-candidates")
-
-	if recommendation == nil {
-		t.Fatal("no spot-candidates recommendation")
-	}
-	if recommendation.Savings.Hourly != 0 {
-		t.Errorf("Savings = %v, want none", recommendation.Savings.Hourly)
-	}
-	if recommendation.Confidence != costmodel.ConfidenceUnknown {
-		t.Errorf("Confidence = %q, want unknown", recommendation.Confidence)
-	}
-}
-
-func TestAnalyzeReturnsNothingForAHealthyReport(t *testing.T) {
-	report := reportOf(
-		node("node-1", 0.20, true, true, "spot", 4, 16),
-		workload("api", 0.15, 3, 13, costmodel.ConfidenceDerived),
+	yes, no := true, false
+	items := append(nodes(2, 0.1),
+		volume("unused", "Bound", &no),
+		volume("in-use", "Bound", &yes),
+		volume("unknown", "Bound", nil),
+		volume("lost", "Lost", nil),
 	)
 
-	if recommendations := Analyze(report); len(recommendations) != 0 {
-		t.Errorf("Analyze() = %+v, want no findings", recommendations)
+	orphans := find(Build(reportOf(items...), Inputs{}), "orphan-volumes")
+
+	if orphans == nil || len(orphans.Items) != 2 || !nearly(orphans.Savings.Hourly, 0.02) {
+		t.Fatalf("orphans = %+v, want the unmounted and the lost claim", orphans)
+	}
+	if orphans.Items[0].Command != "kubectl delete pvc unused -n prod" {
+		t.Errorf("command = %q", orphans.Items[0].Command)
+	}
+}
+
+func TestNodeTypeMatchesTheRequestRatioAndSkipsBurstables(t *testing.T) {
+	// CPU-heavy demand on memory-heavy machines
+	items := append(nodes(4, 0.096), workload("api", "Deployment", 6, 6, nil))
+	inputs := Inputs{MachineTypes: []MachineType{
+		{Name: "m", VCPU: 2, MemoryGB: 8, HourlyUSD: 0.096},
+		{Name: "c", VCPU: 2, MemoryGB: 4, HourlyUSD: 0.085},
+		{Name: "t", VCPU: 2, MemoryGB: 4, HourlyUSD: 0.04, Burstable: true},
+	}}
+
+	plan := Build(reportOf(items...), inputs)
+
+	nodeType := find(plan, "node-type")
+	if nodeType == nil || nodeType.Title != "Switch to c nodes" {
+		t.Fatalf("node-type = %+v, want c and never the burstable t", nodeType)
+	}
+	// 6 cores need 4 nodes either way: 4*0.096 - 4*0.085
+	if !nearly(nodeType.Savings.Hourly, 4*0.096-4*0.085) {
+		t.Errorf("savings = %v, want %v", nodeType.Savings.Hourly, 4*0.096-4*0.085)
+	}
+	if nodeType.Items[0].Change != "4 × m → 4 × c" {
+		t.Errorf("change = %q", nodeType.Items[0].Change)
+	}
+}
+
+func TestSpotCoversOnlyStatelessWorkloads(t *testing.T) {
+	items := append(nodes(2, 0.1),
+		workload("api", "Deployment", 1.5, 1.5, nil),
+		workload("db", "StatefulSet", 0.5, 0.5, nil),
+		workload("agent", "DaemonSet", 1, 1, nil),
+	)
+
+	spot := find(Build(reportOf(items...), Inputs{SpotPriceRatio: 0.35}), "spot-capacity")
+
+	// DaemonSets excluded; 75% of the rest is stateless; 0.2/h of nodes at 65% off
+	if spot == nil || !nearly(spot.Savings.Hourly, 0.2*0.75*0.65) {
+		t.Fatalf("spot = %+v, want %v", spot, 0.2*0.75*0.65)
+	}
+	if len(spot.Items) != 1 || spot.Items[0].Subject.Name != "general" {
+		t.Errorf("items = %+v, want the on-demand node group", spot.Items)
+	}
+}
+
+func TestRightsizingCommandNeedsASingleContainer(t *testing.T) {
+	sidecar := workload("api", "Deployment", 2, 4, &costmodel.Usage{CPUCores: 0.2, MemoryGB: 3.5})
+	sidecar.Detail["containers"] = 2
+	job := workload("report", "Job", 2, 4, &costmodel.Usage{CPUCores: 0.2, MemoryGB: 3.5})
+
+	rightsize := find(Build(reportOf(append(nodes(2, 0.1), sidecar, job)...), Inputs{}), "rightsize-requests")
+
+	for _, item := range rightsize.Items {
+		if item.Command != "" || item.Note == "" {
+			t.Errorf("%s: command %q note %q, want a note instead of an inexact command", item.Subject.Name, item.Command, item.Note)
+		}
+	}
+}
+
+func TestHealthyClusterHasNothingToDo(t *testing.T) {
+	items := append(nodes(2, 0.1), workload("api", "Deployment", 3, 12, &costmodel.Usage{CPUCores: 2.5, MemoryGB: 10}))
+
+	plan := Build(reportOf(items...), Inputs{})
+
+	if len(plan.Recommendations) != 0 || len(plan.DataIssues) != 0 || plan.Savings.Hourly != 0 {
+		t.Errorf("plan = %+v, want nothing to do", plan)
+	}
+}
+
+func TestUsageMetricsIssueWhenNothingWasSampled(t *testing.T) {
+	plan := Build(reportOf(append(nodes(2, 0.1), workload("api", "Deployment", 3, 12, nil))...), Inputs{})
+
+	issue := find(plan, "usage-metrics")
+	if issue == nil || !strings.Contains(issue.Items[0].Command, "metrics-server") {
+		t.Errorf("usage-metrics = %+v, want an install hint", issue)
+	}
+}
+
+func TestRightsizingNeverSuggestsBelowTheFloors(t *testing.T) {
+	idle := workload("agent", "DaemonSet", 0.05*4, 1, &costmodel.Usage{CPUCores: 0, MemoryGB: 0.004})
+	idle.Detail["replicas"] = 4.0
+
+	rightsize := find(Build(reportOf(append(nodes(2, 0.1), idle)...), Inputs{}), "rightsize-requests")
+
+	if rightsize == nil {
+		t.Fatal("rightsize-requests missing")
+	}
+	// 50m → 25m per pod (the floor, never 0m); 256Mi → 250Mi per pod (the floor)
+	change := rightsize.Items[0].Change
+	if change != "cpu 50m → 25m per pod · memory 256Mi → 250Mi per pod" {
+		t.Errorf("change = %q, want both requests stopped at the floors", change)
+	}
+}
+
+func TestRightsizingSkipsRequestsAlreadyAtTheFloor(t *testing.T) {
+	small := workload("sidecar", "Deployment", 0.02, 0.2, &costmodel.Usage{CPUCores: 0.001, MemoryGB: 0.01})
+
+	if find(Build(reportOf(append(nodes(2, 0.1), small)...), Inputs{}), "rightsize-requests") != nil {
+		t.Error("rightsize-requests present, want nothing below the 25m / 250Mi floors")
+	}
+}
+
+func TestManagedAddOnsAreCostedButNeverRightsized(t *testing.T) {
+	coredns := workload("coredns", "Deployment", 0.2, 0.2, &costmodel.Usage{CPUCores: 0.002, MemoryGB: 0.02})
+	coredns.Subject.Namespace = "kube-system"
+	partial := workload("aws-node", "DaemonSet", 0.2, 0, &costmodel.Usage{CPUCores: 0.01})
+	partial.Subject.Namespace = "kube-system"
+	partial.Detail["missingResources"] = []string{"memory"}
+
+	plan := Build(reportOf(append(nodes(2, 0.1), coredns, partial)...), Inputs{})
+
+	if find(plan, "rightsize-requests") != nil {
+		t.Error("rightsize-requests lists kube-system add-ons")
+	}
+	if find(plan, "incomplete-requests") != nil {
+		t.Error("incomplete-requests lists a managed add-on")
+	}
+}
+
+// A workload that requests CPU but not memory is priced and reported, but it
+// does not hold back node-level steps the way a workload with no requests does.
+func TestPartialRequestsDoNotBlockTheNodeSteps(t *testing.T) {
+	partial := workload("web", "Deployment", 1, 0, nil)
+	partial.Detail["missingResources"] = []string{"memory"}
+
+	plan := Build(reportOf(append(nodes(5, 0.1), partial)...), Inputs{})
+
+	issue := find(plan, "incomplete-requests")
+	if issue == nil || !strings.Contains(issue.Items[0].Command, "--requests=memory=<memory>") {
+		t.Fatalf("incomplete-requests = %+v, want a notice with a command template", issue)
+	}
+	if find(plan, "consolidate-nodes") == nil {
+		t.Error("consolidate-nodes missing, want node steps to run despite partial requests")
+	}
+}
+
+// Three 1-core pods on 2-core nodes add up to 3 cores, which would fit on two
+// nodes as a fluid. Pods are whole: with headroom only one fits per node, so
+// no node can go.
+func TestConsolidationPacksWholePods(t *testing.T) {
+	api := workload("api", "Deployment", 3, 3, nil)
+	api.Detail["replicas"] = 3.0
+
+	if find(Build(reportOf(append(nodes(3, 0.1), api)...), Inputs{}), "consolidate-nodes") != nil {
+		t.Error("consolidate-nodes present, want none: one 1-core pod per 1.7 usable cores")
+	}
+}
+
+func TestDaemonSetsReduceEveryNodesRoom(t *testing.T) {
+	// 0.8-core pods fit two per node (1.7 usable) until a 0.2-core DaemonSet
+	// takes room on every node.
+	api := workload("api", "Deployment", 3.2, 4, nil)
+	api.Detail["replicas"] = 4.0
+	agent := workload("agent", "DaemonSet", 0.8, 0.4, nil)
+	agent.Detail["replicas"] = 4.0
+
+	without := find(Build(reportOf(append(nodes(4, 0.1), api)...), Inputs{}), "consolidate-nodes")
+	with := find(Build(reportOf(append(nodes(4, 0.1), api, agent)...), Inputs{}), "consolidate-nodes")
+
+	if without == nil || !nearly(without.Savings.Hourly, 0.2) {
+		t.Fatalf("without the DaemonSet = %+v, want 2 nodes removed", without)
+	}
+	if with != nil {
+		t.Errorf("with the DaemonSet = %+v, want no node removed", with)
 	}
 }

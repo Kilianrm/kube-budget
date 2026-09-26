@@ -83,7 +83,7 @@ func (adapter *ClusterAdapter) GetCostReport(request CostReportRequest) (CostRep
 
 	result := CostReportResult{
 		Report:          report,
-		Recommendations: optimize.Analyze(report),
+		Recommendations: optimize.Build(report, optimize.Inputs{}).Recommendations,
 		ClusterID:       costhistory.ClusterID(report.Scope),
 	}
 	if err := recordCostHistory(report); err != nil {

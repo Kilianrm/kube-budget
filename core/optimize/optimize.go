@@ -1,335 +1,143 @@
-// Package optimize derives recommendations from a cost report. Analyze is a
-// pure function: it reads the report the kernel already produced and never
-// touches a cluster, a price catalog or the file system.
+// Package optimize turns a cost report into an optimization plan. Build is a
+// pure function: it reads the report the kernel already produced plus the
+// machine types a caller offers, and never touches a cluster, a price catalog
+// or the file system.
+//
+// Findings are not independent: removing a node, rightsizing the pods on it
+// and moving it to spot all spend the same money. The plan therefore applies
+// its steps in order to one simulated cluster, and each recommendation claims
+// only the saving it adds on top of the steps before it. The total is the
+// combined scenario, never a sum of overlapping findings.
 package optimize
 
 import (
-	"fmt"
-	"math"
-	"sort"
-
 	"kube-budget/core/costmodel"
 )
 
-// Severity orders recommendations. Blockers come first because they describe
-// data problems that make every other figure unreliable.
-type Severity string
+// Category groups recommendations by where the change is made.
+type Category string
 
 const (
-	SeverityBlocker Severity = "blocker"
-	SeverityHigh    Severity = "high"
-	SeverityMedium  Severity = "medium"
-	SeverityLow     Severity = "low"
-	SeverityInfo    Severity = "info"
+	// CategoryData is a problem with the input that makes other figures unreliable.
+	CategoryData      Category = "data"
+	CategoryWorkloads Category = "workloads"
+	CategoryNodes     Category = "nodes"
+	CategoryStorage   Category = "storage"
 )
 
-var severityRank = map[Severity]int{
-	SeverityBlocker: 0,
-	SeverityHigh:    1,
-	SeverityMedium:  2,
-	SeverityLow:     3,
-	SeverityInfo:    4,
+// Level grades the effort or the risk of applying a recommendation.
+type Level string
+
+const (
+	LevelLow    Level = "low"
+	LevelMedium Level = "medium"
+	LevelHigh   Level = "high"
+)
+
+// MachineType is one machine the node-type step may propose.
+type MachineType struct {
+	Name      string
+	VCPU      float64
+	MemoryGB  float64
+	GPUUnits  float64
+	HourlyUSD float64
+	// Burstable machines throttle under sustained load and are never proposed.
+	Burstable bool
 }
 
-// headroomFraction is the share of node capacity kept free when judging
-// whether the cluster could run on fewer nodes.
-const headroomFraction = 0.15
+// Inputs is what the plan needs beyond the report.
+type Inputs struct {
+	// MachineTypes are the candidates for the node-type step, on-demand prices.
+	MachineTypes []MachineType
+	// SpotPriceRatio is the spot price as a fraction of on-demand; zero
+	// disables the spot step.
+	SpotPriceRatio float64
+	// Dismissed recommendation IDs stay listed but leave the scenario.
+	Dismissed map[string]bool
+}
 
-// Recommendation is one actionable finding with the money attached to it.
+// Item is one resource a recommendation touches, with the exact change.
+type Item struct {
+	Subject costmodel.Subject    `json:"subject"`
+	Change  string               `json:"change"`
+	Savings costmodel.Projection `json:"savings"`
+	Command string               `json:"command,omitempty"`
+	Note    string               `json:"note,omitempty"`
+}
+
+// Recommendation is one step of the plan, or one data issue.
 type Recommendation struct {
-	ID         string                 `json:"id"`
-	Rule       string                 `json:"rule"`
-	Title      string                 `json:"title"`
-	Severity   Severity               `json:"severity"`
-	Count      int                    `json:"count"`
-	Subjects   []costmodel.Subject    `json:"subjects,omitempty"`
-	Current    costmodel.Projection   `json:"current"`
-	Proposed   costmodel.Projection   `json:"proposed"`
-	Savings    costmodel.Projection   `json:"savings"`
-	Confidence costmodel.Confidence   `json:"confidence"`
-	Rationale  string                 `json:"rationale"`
-	Action     string                 `json:"action"`
-	Detail     map[string]interface{} `json:"detail,omitempty"`
+	ID         string               `json:"id"`
+	Category   Category             `json:"category"`
+	Title      string               `json:"title"`
+	Effort     Level                `json:"effort"`
+	Risk       Level                `json:"risk"`
+	Confidence costmodel.Confidence `json:"confidence"`
+	// Savings is the billed saving this step adds to the plan.
+	Savings costmodel.Projection `json:"savings"`
+	// FreedRequests is requested cost released without a billed saving yet;
+	// it becomes billed savings only when nodes can be removed.
+	FreedRequests costmodel.Projection `json:"freedRequests"`
+	Rationale     string               `json:"rationale"`
+	Action        string               `json:"action"`
+	Dismissed     bool                 `json:"dismissed"`
+	Items         []Item               `json:"items,omitempty"`
 }
 
-// Analyze applies every rule to a report and returns the findings ordered by
-// severity and then by savings.
-func Analyze(report costmodel.CostReport) []Recommendation {
-	rules := []func(costmodel.CostReport) *Recommendation{
-		ruleMissingRequests,
-		ruleUnpricedSubjects,
-		ruleUnusableNodes,
-		ruleOrphanVolumes,
-		ruleConsolidation,
-		ruleSpotCandidates,
+// Step is one bar of the savings waterfall.
+type Step struct {
+	ID      string               `json:"id"`
+	Title   string               `json:"title"`
+	Savings costmodel.Projection `json:"savings"`
+}
+
+// Plan is the combined optimization scenario for one report.
+type Plan struct {
+	Current         costmodel.Projection   `json:"current"`
+	Optimized       costmodel.Projection   `json:"optimized"`
+	Savings         costmodel.Projection   `json:"savings"`
+	Steps           []Step                 `json:"steps"`
+	DataIssues      []Recommendation       `json:"dataIssues"`
+	Recommendations []Recommendation       `json:"recommendations"`
+	Assumptions     []costmodel.Assumption `json:"assumptions"`
+}
+
+// Build simulates every step in order and returns the plan.
+func Build(report costmodel.CostReport, inputs Inputs) Plan {
+	current := report.Totals[costmodel.BasisProvisioned]
+	plan := Plan{
+		Current:         current,
+		Steps:           make([]Step, 0),
+		DataIssues:      dataIssues(report),
+		Recommendations: make([]Recommendation, 0),
+		Assumptions:     planAssumptions,
 	}
 
-	recommendations := make([]Recommendation, 0, len(rules))
-	for _, rule := range rules {
-		if recommendation := rule(report); recommendation != nil {
-			recommendations = append(recommendations, *recommendation)
+	scenario := newScenario(report, inputs)
+	saved := 0.0
+	for _, step := range planSteps {
+		recommendation, next := step(scenario)
+		if recommendation == nil {
+			continue
 		}
-	}
-
-	sort.SliceStable(recommendations, func(i, j int) bool {
-		if severityRank[recommendations[i].Severity] != severityRank[recommendations[j].Severity] {
-			return severityRank[recommendations[i].Severity] < severityRank[recommendations[j].Severity]
+		recommendation.Dismissed = inputs.Dismissed[recommendation.ID]
+		if !recommendation.Dismissed {
+			scenario = next
+			if recommendation.Savings.Hourly > 0 {
+				saved += recommendation.Savings.Hourly
+				plan.Steps = append(plan.Steps, Step{ID: recommendation.ID, Title: recommendation.Title, Savings: recommendation.Savings})
+			}
 		}
-		return recommendations[i].Savings.Hourly > recommendations[j].Savings.Hourly
-	})
-	return recommendations
+		plan.Recommendations = append(plan.Recommendations, *recommendation)
+	}
+
+	plan.Savings = costmodel.Project(saved)
+	plan.Optimized = current.Sub(plan.Savings)
+	return plan
 }
 
-// ruleMissingRequests reports workloads whose cost cannot be attributed. It
-// yields no savings: it is the prerequisite for trusting every other rule.
-func ruleMissingRequests(report costmodel.CostReport) *Recommendation {
-	items := filter(report, func(item costmodel.LineItem) bool {
-		return item.Subject.Kind == costmodel.SubjectWorkload && !item.Priced()
-	})
-	if len(items) == 0 {
-		return nil
-	}
-
-	return &Recommendation{
-		ID:         "missing-requests",
-		Rule:       "missing-requests",
-		Title:      fmt.Sprintf("%s without resource requests", plural(len(items), "workload")),
-		Severity:   SeverityBlocker,
-		Count:      len(items),
-		Subjects:   subjectsOf(items),
-		Confidence: costmodel.ConfidenceExact,
-		Rationale:  "Their cost cannot be attributed, so the idle figure is overstated and every saving below is a lower bound.",
-		Action:     "Declare resources.requests for these workloads, then re-run the report.",
-	}
-}
-
-func ruleUnpricedSubjects(report costmodel.CostReport) *Recommendation {
-	items := filter(report, func(item costmodel.LineItem) bool {
-		return item.Subject.Kind != costmodel.SubjectWorkload && !item.Priced()
-	})
-	if len(items) == 0 {
-		return nil
-	}
-
-	return &Recommendation{
-		ID:         "unpriced-subjects",
-		Rule:       "unpriced-subjects",
-		Title:      fmt.Sprintf("%s missing a price", plural(len(items), "resource")),
-		Severity:   SeverityBlocker,
-		Count:      len(items),
-		Subjects:   subjectsOf(items),
-		Confidence: costmodel.ConfidenceExact,
-		Rationale:  "These resources are excluded from every total, so the billed figure is understated.",
-		Action:     "Add the missing SKUs to the price catalog for this region.",
-	}
-}
-
-func ruleUnusableNodes(report costmodel.CostReport) *Recommendation {
-	items := filter(report, func(item costmodel.LineItem) bool {
-		if item.Subject.Kind != costmodel.SubjectNode || !item.Priced() {
-			return false
-		}
-		return isFalse(item.Detail, "ready") || isFalse(item.Detail, "schedulable")
-	})
-	if len(items) == 0 {
-		return nil
-	}
-
-	current := sum(items)
-	return &Recommendation{
-		ID:         "unusable-nodes",
-		Rule:       "idle-node",
-		Title:      fmt.Sprintf("%s billed but not usable", plural(len(items), "node")),
-		Severity:   SeverityHigh,
-		Count:      len(items),
-		Subjects:   subjectsOf(items),
-		Current:    current,
-		Savings:    current,
-		Confidence: lowestConfidence(items),
-		Rationale:  "Nodes that are not ready or are cordoned still bill at the full instance rate while running nothing schedulable.",
-		Action:     "Recover or terminate these nodes.",
-	}
-}
-
-func ruleOrphanVolumes(report costmodel.CostReport) *Recommendation {
-	items := filter(report, func(item costmodel.LineItem) bool {
-		if item.Subject.Kind != costmodel.SubjectVolume || !item.Priced() {
-			return false
-		}
-		status, _ := item.Detail["status"].(string)
-		return status != "" && status != "Bound"
-	})
-	if len(items) == 0 {
-		return nil
-	}
-
-	current := sum(items)
-	return &Recommendation{
-		ID:         "orphan-volumes",
-		Rule:       "orphan-volume",
-		Title:      fmt.Sprintf("%s not bound to a workload", plural(len(items), "volume")),
-		Severity:   SeverityMedium,
-		Count:      len(items),
-		Subjects:   subjectsOf(items),
-		Current:    current,
-		Savings:    current,
-		Confidence: lowestConfidence(items),
-		Rationale:  "Provisioned storage is billed whether or not a pod ever mounts it.",
-		Action:     "Delete the claims that are no longer needed.",
-	}
-}
-
-// ruleConsolidation checks whether the requested capacity would fit on fewer
-// nodes. It stays silent when any workload lacks requests, because the demand
-// side would be incomplete and the answer would be wrong.
-func ruleConsolidation(report costmodel.CostReport) *Recommendation {
-	if ruleMissingRequests(report) != nil {
-		return nil
-	}
-
-	nodes := filter(report, func(item costmodel.LineItem) bool {
-		return item.Subject.Kind == costmodel.SubjectNode && item.Priced()
-	})
-	if len(nodes) < 2 || len(nodes) != countNodes(report) {
-		return nil
-	}
-
-	var capacity costmodel.Usage
-	for _, node := range nodes {
-		capacity = capacity.Add(node.Usage)
-	}
-	perNodeCPU := capacity.CPUCores / float64(len(nodes))
-	perNodeMemory := capacity.MemoryGB / float64(len(nodes))
-	if perNodeCPU <= 0 || perNodeMemory <= 0 {
-		return nil
-	}
-
-	var requested costmodel.Usage
-	for _, item := range filter(report, func(item costmodel.LineItem) bool {
-		return item.Basis == costmodel.BasisRequested && item.Priced()
-	}) {
-		requested = requested.Add(item.Usage)
-	}
-
-	usable := 1 - headroomFraction
-	needed := math.Ceil(math.Max(requested.CPUCores/(perNodeCPU*usable), requested.MemoryGB/(perNodeMemory*usable)))
-	removable := len(nodes) - int(math.Max(needed, 1))
-	if removable <= 0 {
-		return nil
-	}
-
-	current := sum(nodes)
-	averageHourly := current.Hourly / float64(len(nodes))
-	savings := costmodel.Project(averageHourly * float64(removable))
-
-	return &Recommendation{
-		ID:         "consolidation",
-		Rule:       "consolidation",
-		Title:      fmt.Sprintf("Requested capacity fits on %d fewer %s", removable, noun(removable, "node")),
-		Severity:   SeverityHigh,
-		Count:      removable,
-		Current:    current,
-		Proposed:   current.Sub(savings),
-		Savings:    savings,
-		Confidence: costmodel.ConfidenceEstimated,
-		Rationale:  fmt.Sprintf("Requests total %.1f cores and %.1f GB, which fits on %d of %d nodes with %.0f%% headroom.", requested.CPUCores, requested.MemoryGB, int(needed), len(nodes), headroomFraction*100),
-		Action:     "Reduce the node group's desired size, or let the cluster autoscaler reclaim the spare nodes.",
-		Detail:     map[string]interface{}{"neededNodes": int(needed), "currentNodes": len(nodes)},
-	}
-}
-
-// ruleSpotCandidates flags on-demand capacity without claiming a saving: the
-// spot price is not part of the report and varies over time.
-func ruleSpotCandidates(report costmodel.CostReport) *Recommendation {
-	items := filter(report, func(item costmodel.LineItem) bool {
-		if item.Subject.Kind != costmodel.SubjectNode || !item.Priced() {
-			return false
-		}
-		purchase, _ := item.Detail["purchase"].(string)
-		return purchase == "on-demand"
-	})
-	if len(items) == 0 {
-		return nil
-	}
-
-	return &Recommendation{
-		ID:         "spot-candidates",
-		Rule:       "spot-candidate",
-		Title:      fmt.Sprintf("%s running on on-demand capacity", plural(len(items), "node")),
-		Severity:   SeverityLow,
-		Count:      len(items),
-		Subjects:   subjectsOf(items),
-		Current:    sum(items),
-		Confidence: costmodel.ConfidenceUnknown,
-		Rationale:  "Fault-tolerant workloads can run on spot capacity, but the discount varies by instance type and region and is not part of this report.",
-		Action:     "Move interruption-tolerant workloads to a spot node group and compare the two reports.",
-	}
-}
-
-func filter(report costmodel.CostReport, keep func(costmodel.LineItem) bool) []costmodel.LineItem {
-	matching := make([]costmodel.LineItem, 0)
-	for _, item := range report.Items {
-		if keep(item) {
-			matching = append(matching, item)
-		}
-	}
-	return matching
-}
-
-func countNodes(report costmodel.CostReport) int {
-	count := 0
-	for _, item := range report.Items {
-		if item.Subject.Kind == costmodel.SubjectNode {
-			count++
-		}
-	}
-	return count
-}
-
-func sum(items []costmodel.LineItem) costmodel.Projection {
-	total := 0.0
-	for _, item := range items {
-		total += item.HourlyUSD
-	}
-	return costmodel.Project(total)
-}
-
-func subjectsOf(items []costmodel.LineItem) []costmodel.Subject {
-	subjects := make([]costmodel.Subject, 0, len(items))
-	for _, item := range items {
-		subjects = append(subjects, item.Subject)
-	}
-	return subjects
-}
-
-func lowestConfidence(items []costmodel.LineItem) costmodel.Confidence {
-	lowest := costmodel.ConfidenceExact
-	ranking := map[costmodel.Confidence]int{
-		costmodel.ConfidenceExact:     0,
-		costmodel.ConfidenceDerived:   1,
-		costmodel.ConfidenceEstimated: 2,
-		costmodel.ConfidenceUnknown:   3,
-	}
-	for _, item := range items {
-		if ranking[item.Confidence] > ranking[lowest] {
-			lowest = item.Confidence
-		}
-	}
-	return lowest
-}
-
-func isFalse(detail map[string]interface{}, key string) bool {
-	value, ok := detail[key].(bool)
-	return ok && !value
-}
-
-func plural(count int, word string) string {
-	return fmt.Sprintf("%d %s", count, noun(count, word))
-}
-
-func noun(count int, word string) string {
-	if count == 1 {
-		return word
-	}
-	return word + "s"
+var planAssumptions = []costmodel.Assumption{
+	{Key: "plan-order", Detail: "steps are simulated in order and each claims only the saving it adds, so the total never counts the same node twice"},
+	{Key: "plan-node-pool", Detail: "node steps model the cluster as one pool of its most common machine type, with 15% headroom and at least two nodes"},
+	{Key: "plan-placement", Detail: "affinity, zones, taints and disruption budgets are not modeled; check them before removing nodes"},
 }
