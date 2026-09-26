@@ -34,7 +34,7 @@ Every cluster cost question is answered by one of two views:
 ```
 Provisioned cost  ???????????????????????????????????????????  (what you pay)
         ?
-        ??? Allocated cost (sum of workload requests × rate)   ?? (what you asked for)
+        ??? Allocated cost (sum of workload requests ï¿½ rate)   ?? (what you asked for)
         ?        ?
         ?        ??? Used cost (actual utilization)  [future, needs metrics]
         ?
@@ -219,7 +219,7 @@ Allocated side, already available: `Snapshot.Workloads[].Requests`,
 - **DaemonSets** scale with node count ? replicas = number of schedulable nodes, not `spec.replicas`.
 - **HPA-backed workloads** ? cost is a *band* (`MinTotal`/`MaxTotal` already exist); the explorer
   should show current + band, not a single number.
-- **Jobs / CronJobs** are ephemeral ? cost per run × schedule frequency, not continuous hourly.
+- **Jobs / CronJobs** are ephemeral ? cost per run ï¿½ schedule frequency, not continuous hourly.
 - **`MissingRequests: true`** ? the workload's allocated cost is **unknown**, not zero. Counting it
   as zero silently inflates "idle" and corrupts optimization recommendations.
 - **Spot capacity** ? different rate and a volatility warning.
@@ -233,14 +233,14 @@ Allocated side, already available: `Snapshot.Workloads[].Requests`,
 Two distinct things that must not be confused in the UI wording:
 
 ### 7.1 Run-rate (available now, from one snapshot)
-Extrapolation of the current hourly rate: `daily = hourly × 24`, `monthly = hourly × 730`.
+Extrapolation of the current hourly rate: `daily = hourly ï¿½ 24`, `monthly = hourly ï¿½ 730`.
 Label it **"run rate" / "projected"**, never "spend". This covers the immediate requirement.
 
 ### 7.2 Actual cost over a window (needs persistence)
 Requires a history of snapshots and time-weighted integration:
 
 ```
-cost(window) = ? over consecutive snapshots  hourlyRate(s?) × ?t(s?, s???)
+cost(window) = ? over consecutive snapshots  hourlyRate(s?) ï¿½ ?t(s?, s???)
 ```
 
 Design it now, implement in phase 3:
@@ -322,7 +322,7 @@ report twice and risking two different numbers on screen.
 ## 9. Implementation order
 
 1. **Kernel** ? DONE. `core/costmodel` (Subject, Basis, LineItem, Projection, CostReport).
-   The `×24 / ×730` math now exists only in `costmodel.Project`.
+   The `ï¿½24 / ï¿½730` math now exists only in `costmodel.Project`.
 2. **Rate resolver** ? DONE. `pricing.RateResolver` (`ResolveNode`, `ResolveResources`,
    `ResolveFlat`) implemented once in `internal/providers/catalog`; aws/azure/gcp are now data-only
    declarations. Control-plane and spot rates added, `CPUCostShare` is explicit and emitted as an
@@ -346,8 +346,84 @@ report twice and risking two different numbers on screen.
    report. `core/costseries` integrates those captures into spend per hour or day and reports
    uncaptured periods as gaps. `GetCostTrend` and the Cost section's History view expose it.
 
-Utilization-based rules (request versus actual usage) stay blocked until the collector reads
-metrics-server or Prometheus and `BasisUsed` becomes available.
+8. **Reconciliation** â€” DONE. The collector records every pod with its node and owning controller
+   (snapshot schema 4), and each pod is priced at the rate of the node it runs on. Breakdowns are
+   keyed by basis (`byDimension[basis][dimension]`), so billed and requested cost are never summed.
+   Idle is node capacity only, split per component (`idleByComponent`); the control plane is
+   `shared` and volumes are charged to their namespace. `allocation[namespace|workload]` rows
+   (consumers, then `__idle__` and `__shared__`) always add up to the provisioned total. Ephemeral
+   storage requests are not priced: they are the node's own disk.
+
+9. **History in the explorer** â€” DONE. The separate History view is gone: the explorer's "Spend over
+   time" panel shows allocated / idle / shared spend per hour or day, the top namespaces of the
+   window, and the change in average billed rate against the previous window of equal length
+   (rates, not totals, because coverage differs). History records are schema 2; version 1 idle
+   included the control plane and volumes and is ignored.
+10. **Usage** â€” DONE. The collector reads `metrics.k8s.io` pod metrics over REST (no metrics client
+   dependency) and degrades to a warning without metrics-server. Usage is attached to a workload
+   only when every scheduled pod was sampled, priced at the same node rates as its requests, and
+   summarized as `usage` (cluster) and `efficiency` (per allocation row). `optimize` gained a
+   `rightsize-requests` rule: flag a resource used below 50% of its request, suggest usage + 50%.
+   Usage is a single sample; recording per-workload peaks in the history store is the next step
+   before the rule can be trusted for memory.
+
+11. **Budget & forecast** â€” DONE. A third Cost view. `costseries.BuildForecast` splits the calendar
+   month (local time, real month length) into recorded spend, an estimate for uncaptured elapsed
+   hours at the average recorded rate, and the rest of the month at the current run rate.
+   `EvaluateBudget` places it against a per-cluster monthly budget (`internal/storage/budget`,
+   a private JSON file) as on-track / at-risk (â‰¥90%) / over / exceeded, with the date the run
+   rate uses it up. `costseries.Drivers` explains a change between two windows by average rate
+   per namespace, node group, idle and shared; namespaces + idle + shared add up to the change,
+   node groups are the same money seen from the infrastructure side and are shown apart.
+   Alerts only surface while the app is open.
+
+12. **Optimization plan** â€” DONE. `optimize.Build(report, inputs)` replaces the independent rules
+   with one simulated cluster (usable nodes as a pool of the dominant machine type, 15% headroom,
+   at least two nodes). Steps run in order â€” orphan volumes, unusable nodes, consolidation,
+   rightsizing, node type, spot â€” and each claims only the saving it adds, so the total is a
+   combined scenario shown as a waterfall. Rightsizing reports the requests it frees separately
+   from the billed saving (the nodes it lets you remove). Data issues (missing requests, unpriced
+   resources, no metrics) are listed apart and hold back node-level steps. Every recommendation
+   carries category, effort, risk and per-resource items with exact `kubectl` commands where one
+   command is exact. Orphan volumes are Bound claims no running pod mounts; Pending claims are
+   not billed. Dismissals and an applied journal (with the billed rate at that moment) live in
+   `internal/storage/recommendations`; the adapter caches the last report so acting re-plans
+   without collecting the cluster again.
+
+13. **Requests and managed add-ons** â€” DONE. The collector reports which resources a workload leaves
+   unrequested (`missingResources`). Only a workload that declares no CPU and no memory has an
+   unknown cost and holds back node-level steps; one that omits a single resource (EKS ships
+   `aws-node` and `kube-proxy` without memory requests) is priced on what it declares and listed
+   as a non-blocking "incomplete requests" data issue. System namespaces (`kube-*`, `amazon-`,
+   `aws-`, `gke-`, `gmp-`, `azure-`) are costed but never rightsized or listed as incomplete.
+   Rightsizing never suggests below 25m CPU / 250Mi memory per pod, the VPA defaults.
+
+14. **Cluster impact (what-if)** â€” DONE. Manifest mode's "Connected cluster" option (previously a
+   placeholder that sent no pricing and failed) prices a manifest with the cluster's own rates
+   (the most common untainted machine type) and calls `ClusterAdapter.SimulateManifest`.
+   `core/whatif.Simulate` places each replica on the untainted node with the most free room,
+   using per-node requests now carried on node items, adds nodes of the cluster's usual type
+   (already carrying its DaemonSets) only for what fits nowhere, then rebuilds the report and the
+   plan with the same kernel and compares: billed, idle, plan savings. The forecast moves only
+   from now on (`Forecast.WithRunRateChange`). Both sections read one shared report
+   (`CostReportContext`), fetched once per connection. The plan's capacity model now packs whole
+   pods first-fit with each node's DaemonSet overhead, so it agrees with the simulation.
+15. **Recommendation lifecycle** â€” DONE. A recommendation is open, applied or dismissed.
+   Marking it applied is idempotent: it moves to Applied as *pending* and stays in the plan's
+   savings, because the bill has not moved yet. The first report that no longer detects its ID
+   confirms it (`recommendations.Store.Confirm`), after which the same ID can come back as a new
+   occurrence. "Not applied, reopen" withdraws a pending mark. Every action (applied, confirmed,
+   reopened, dismissed, restored) goes to a per-cluster history log of 200 entries, shown in
+   the History tab. Stores write only when the state actually changed.
+16. **Supported clusters** â€” DONE. Every snapshot carries a `platform`: the cloud read from the
+   nodes' `providerID` scheme (`aws`, `gce`, `azure`; `kind`, `k3s`â€¦ are not clouds), the most
+   common region label, and whether a price catalog covers both (`clusterPlatform`). An EKS
+   connection stands in when no node reports one. Without an explicit pricing provider, the cost
+   report prices with the detected platform, so an EKS cluster added through a plain kubeconfig
+   context is priced too. An unsupported cluster locks the Cost section with the reason and
+   disables Manifest's "Connected cluster" pricing; the Cluster section works everywhere.
+
+Grouping by team or label is out of scope by decision; allocation stays at namespace and workload.
 
 Steps 1?5 deliver the requested hourly/daily/monthly diagnosis with the data already collected.
 Steps 6?7 need no further core redesign.
