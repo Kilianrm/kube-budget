@@ -136,3 +136,93 @@ func resources(cpu, memory string) corev1.ResourceList {
 		corev1.ResourceMemory: resource.MustParse(memory),
 	}
 }
+
+func TestPodOwnerResolvesDeploymentsThroughReplicaSets(t *testing.T) {
+	controller := true
+	owned := func(kind, name string, labels map[string]string) *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name:            "pod-1",
+			Labels:          labels,
+			OwnerReferences: []metav1.OwnerReference{{Kind: kind, Name: name, Controller: &controller}},
+		}}
+	}
+
+	cases := []struct {
+		name      string
+		pod       *corev1.Pod
+		wantKind  string
+		wantOwner string
+	}{
+		{"deployment", owned("ReplicaSet", "api-7d9f8b", map[string]string{appsv1.DefaultDeploymentUniqueLabelKey: "7d9f8b"}), "Deployment", "api"},
+		{"bare replicaset", owned("ReplicaSet", "legacy", nil), "ReplicaSet", "legacy"},
+		{"job", owned("Job", "backup-2890", nil), "Job", "backup-2890"},
+		{"bare pod", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "debug"}}, "Pod", "debug"},
+	}
+	for _, tc := range cases {
+		kind, owner := podOwner(tc.pod)
+		if kind != tc.wantKind || owner != tc.wantOwner {
+			t.Errorf("%s: podOwner() = %s/%s, want %s/%s", tc.name, kind, owner, tc.wantKind, tc.wantOwner)
+		}
+	}
+}
+
+func TestCollectPodsSkipsFinishedPodsAndKeepsPlacement(t *testing.T) {
+	data := clustermode.CollectedData{NamespacePodCounts: map[string]int{}}
+	collectPods([]corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "prod"}, Spec: corev1.PodSpec{NodeName: "worker-1", Containers: []corev1.Container{{
+			Name: "api", Resources: corev1.ResourceRequirements{Requests: resources("250m", "256Mi")},
+		}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "done", Namespace: "prod"}, Status: corev1.PodStatus{Phase: corev1.PodSucceeded}},
+	}, &data)
+
+	if len(data.Pods) != 1 {
+		t.Fatalf("Pods = %#v, want only the running pod", data.Pods)
+	}
+	pod := data.Pods[0]
+	if pod.NodeName != "worker-1" || pod.Requests.CPUMilli != 250 || pod.OwnerKind != "Pod" || pod.MissingRequests {
+		t.Errorf("Pod = %#v", pod)
+	}
+}
+
+func TestApplyPodMetricsSumsContainerUsage(t *testing.T) {
+	pods := []clustermode.Pod{{Name: "api-1", Namespace: "prod"}, {Name: "fresh", Namespace: "prod"}}
+	raw := []byte(`{"kind":"PodMetricsList","items":[
+		{"metadata":{"name":"api-1","namespace":"prod"},"containers":[
+			{"name":"api","usage":{"cpu":"12500000n","memory":"100Mi"}},
+			{"name":"proxy","usage":{"cpu":"3m","memory":"28Mi"}}]},
+		{"metadata":{"name":"gone","namespace":"prod"},"containers":[{"name":"x","usage":{"cpu":"1","memory":"1Gi"}}]}]}`)
+
+	if err := applyPodMetrics(raw, pods); err != nil {
+		t.Fatalf("applyPodMetrics() error = %v", err)
+	}
+	if pods[0].Usage == nil || pods[0].Usage.CPUMilli != 16 || pods[0].Usage.MemoryBytes != 128*1024*1024 {
+		t.Errorf("api-1 usage = %+v, want 16m and 128Mi", pods[0].Usage)
+	}
+	if pods[1].Usage != nil {
+		t.Errorf("fresh usage = %+v, want nil when the pod was not sampled", pods[1].Usage)
+	}
+}
+
+func TestPodClaimsListsMountedClaimsOnly(t *testing.T) {
+	spec := &corev1.PodSpec{Volumes: []corev1.Volume{
+		{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "postgres-data"}}},
+		{Name: "cache", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}}
+
+	if claims := podClaims(spec); len(claims) != 1 || claims[0] != "postgres-data" {
+		t.Errorf("podClaims() = %v, want [postgres-data]", claims)
+	}
+}
+
+func TestContainerRequestsListsUnrequestedResources(t *testing.T) {
+	spec := &corev1.PodSpec{Containers: []corev1.Container{
+		{Name: "aws-node", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("25m")}}},
+		{Name: "agent", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("25m")}}},
+	}}
+
+	_, total, missing := containerRequests(spec)
+
+	if total.CPUMilli != 50 || len(missing) != 1 || missing[0] != "memory" {
+		t.Errorf("containerRequests() = %d mCPU, missing %v, want 50 and [memory]", total.CPUMilli, missing)
+	}
+}

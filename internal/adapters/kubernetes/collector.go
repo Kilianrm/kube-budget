@@ -2,16 +2,20 @@ package kubernetes
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	clustermode "kube-budget/internal/application/cluster"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -27,17 +31,102 @@ func NewCollector(client kubernetes.Interface, cluster clustermode.ClusterInfo, 
 	return &Collector{client: client, cluster: cluster, namespace: strings.TrimSpace(namespace)}
 }
 
+// listed is one API call's answer.
+type listed[T any] struct {
+	value T
+	err   error
+}
+
+// clusterLists holds every list the collector needs. They are independent, so
+// they are requested at once: a snapshot waits for the slowest call instead of
+// the sum of them all, which matters on remote API servers like EKS.
+type clusterLists struct {
+	pods         listed[*corev1.PodList]
+	nodes        listed[*corev1.NodeList]
+	deployments  listed[*appsv1.DeploymentList]
+	statefulSets listed[*appsv1.StatefulSetList]
+	daemonSets   listed[*appsv1.DaemonSetList]
+	jobs         listed[*batchv1.JobList]
+	cronJobs     listed[*batchv1.CronJobList]
+	configMaps   listed[*corev1.ConfigMapList]
+	secrets      listed[*corev1.SecretList]
+	services     listed[*corev1.ServiceList]
+	claims       listed[*corev1.PersistentVolumeClaimList]
+	quotas       listed[*corev1.ResourceQuotaList]
+	limitRanges  listed[*corev1.LimitRangeList]
+	podMetrics   listed[[]byte]
+}
+
+func fetch[T any](group *sync.WaitGroup, result *listed[T], call func() (T, error)) {
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		result.value, result.err = call()
+	}()
+}
+
+func (collector *Collector) list(ctx context.Context) *clusterLists {
+	lists := &clusterLists{}
+	var group sync.WaitGroup
+	fetch(&group, &lists.pods, func() (*corev1.PodList, error) {
+		return collector.client.CoreV1().Pods(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.nodes, func() (*corev1.NodeList, error) {
+		return collector.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.deployments, func() (*appsv1.DeploymentList, error) {
+		return collector.client.AppsV1().Deployments(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.statefulSets, func() (*appsv1.StatefulSetList, error) {
+		return collector.client.AppsV1().StatefulSets(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.daemonSets, func() (*appsv1.DaemonSetList, error) {
+		return collector.client.AppsV1().DaemonSets(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.jobs, func() (*batchv1.JobList, error) {
+		return collector.client.BatchV1().Jobs(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.cronJobs, func() (*batchv1.CronJobList, error) {
+		return collector.client.BatchV1().CronJobs(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.configMaps, func() (*corev1.ConfigMapList, error) {
+		return collector.client.CoreV1().ConfigMaps(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.secrets, func() (*corev1.SecretList, error) {
+		return collector.client.CoreV1().Secrets(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.services, func() (*corev1.ServiceList, error) {
+		return collector.client.CoreV1().Services(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.claims, func() (*corev1.PersistentVolumeClaimList, error) {
+		return collector.client.CoreV1().PersistentVolumeClaims(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.quotas, func() (*corev1.ResourceQuotaList, error) {
+		return collector.client.CoreV1().ResourceQuotas(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.limitRanges, func() (*corev1.LimitRangeList, error) {
+		return collector.client.CoreV1().LimitRanges(collector.namespace).List(ctx, metav1.ListOptions{})
+	})
+	fetch(&group, &lists.podMetrics, func() ([]byte, error) {
+		return collector.podMetrics(ctx)
+	})
+	group.Wait()
+	return lists
+}
+
 func (collector *Collector) Collect(ctx context.Context) (clustermode.CollectedData, error) {
 	data := clustermode.CollectedData{
 		Cluster:            collector.cluster,
 		Nodes:              make([]clustermode.Node, 0),
 		Workloads:          make([]clustermode.Workload, 0),
+		Pods:               make([]clustermode.Pod, 0),
 		Resources:          make([]clustermode.Resource, 0),
 		NamespacePodCounts: make(map[string]int),
 		Warnings:           make([]clustermode.Warning, 0),
 	}
+	lists := collector.list(ctx)
 
-	pods, err := collector.client.CoreV1().Pods(collector.namespace).List(ctx, metav1.ListOptions{})
+	pods, err := lists.pods.value, lists.pods.err
 	podItems := make([]corev1.Pod, 0)
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("pods", err))
@@ -46,14 +135,14 @@ func (collector *Collector) Collect(ctx context.Context) (clustermode.CollectedD
 		collectPods(podItems, &data)
 	}
 
-	nodes, err := collector.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := lists.nodes.value, lists.nodes.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("nodes", err))
 	} else {
 		data.Nodes = collectNodes(nodes.Items, podItems)
 	}
 
-	deployments, err := collector.client.AppsV1().Deployments(collector.namespace).List(ctx, metav1.ListOptions{})
+	deployments, err := lists.deployments.value, lists.deployments.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("deployments", err))
 	} else {
@@ -62,7 +151,7 @@ func (collector *Collector) Collect(ctx context.Context) (clustermode.CollectedD
 		}
 	}
 
-	statefulSets, err := collector.client.AppsV1().StatefulSets(collector.namespace).List(ctx, metav1.ListOptions{})
+	statefulSets, err := lists.statefulSets.value, lists.statefulSets.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("statefulsets", err))
 	} else {
@@ -71,7 +160,7 @@ func (collector *Collector) Collect(ctx context.Context) (clustermode.CollectedD
 		}
 	}
 
-	daemonSets, err := collector.client.AppsV1().DaemonSets(collector.namespace).List(ctx, metav1.ListOptions{})
+	daemonSets, err := lists.daemonSets.value, lists.daemonSets.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("daemonsets", err))
 	} else {
@@ -80,8 +169,9 @@ func (collector *Collector) Collect(ctx context.Context) (clustermode.CollectedD
 		}
 	}
 
-	collector.collectBatchResources(ctx, &data)
-	collector.collectCoreResources(ctx, &data)
+	collectPodUsage(lists.podMetrics, &data)
+	collectBatchResources(lists, &data)
+	collectCoreResources(lists, &data)
 
 	sort.Slice(data.Workloads, func(left, right int) bool {
 		if data.Workloads[left].Namespace == data.Workloads[right].Namespace {
@@ -104,8 +194,8 @@ func (collector *Collector) Collect(ctx context.Context) (clustermode.CollectedD
 	return data, nil
 }
 
-func (collector *Collector) collectBatchResources(ctx context.Context, data *clustermode.CollectedData) {
-	jobs, err := collector.client.BatchV1().Jobs(collector.namespace).List(ctx, metav1.ListOptions{})
+func collectBatchResources(lists *clusterLists, data *clustermode.CollectedData) {
+	jobs, err := lists.jobs.value, lists.jobs.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("jobs", err))
 	} else {
@@ -114,7 +204,7 @@ func (collector *Collector) collectBatchResources(ctx context.Context, data *clu
 		}
 	}
 
-	cronJobs, err := collector.client.BatchV1().CronJobs(collector.namespace).List(ctx, metav1.ListOptions{})
+	cronJobs, err := lists.cronJobs.value, lists.cronJobs.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("cronjobs", err))
 	} else {
@@ -124,8 +214,8 @@ func (collector *Collector) collectBatchResources(ctx context.Context, data *clu
 	}
 }
 
-func (collector *Collector) collectCoreResources(ctx context.Context, data *clustermode.CollectedData) {
-	configMaps, err := collector.client.CoreV1().ConfigMaps(collector.namespace).List(ctx, metav1.ListOptions{})
+func collectCoreResources(lists *clusterLists, data *clustermode.CollectedData) {
+	configMaps, err := lists.configMaps.value, lists.configMaps.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("configmaps", err))
 	} else {
@@ -137,7 +227,7 @@ func (collector *Collector) collectCoreResources(ctx context.Context, data *clus
 		}
 	}
 
-	secrets, err := collector.client.CoreV1().Secrets(collector.namespace).List(ctx, metav1.ListOptions{})
+	secrets, err := lists.secrets.value, lists.secrets.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("secrets", err))
 	} else {
@@ -149,7 +239,7 @@ func (collector *Collector) collectCoreResources(ctx context.Context, data *clus
 		}
 	}
 
-	services, err := collector.client.CoreV1().Services(collector.namespace).List(ctx, metav1.ListOptions{})
+	services, err := lists.services.value, lists.services.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("services", err))
 	} else {
@@ -161,7 +251,7 @@ func (collector *Collector) collectCoreResources(ctx context.Context, data *clus
 		}
 	}
 
-	claims, err := collector.client.CoreV1().PersistentVolumeClaims(collector.namespace).List(ctx, metav1.ListOptions{})
+	claims, err := lists.claims.value, lists.claims.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("persistentvolumeclaims", err))
 	} else {
@@ -176,7 +266,7 @@ func (collector *Collector) collectCoreResources(ctx context.Context, data *clus
 		}
 	}
 
-	quotas, err := collector.client.CoreV1().ResourceQuotas(collector.namespace).List(ctx, metav1.ListOptions{})
+	quotas, err := lists.quotas.value, lists.quotas.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("resourcequotas", err))
 	} else {
@@ -196,7 +286,7 @@ func (collector *Collector) collectCoreResources(ctx context.Context, data *clus
 		}
 	}
 
-	limitRanges, err := collector.client.CoreV1().LimitRanges(collector.namespace).List(ctx, metav1.ListOptions{})
+	limitRanges, err := lists.limitRanges.value, lists.limitRanges.err
 	if err != nil {
 		data.Warnings = append(data.Warnings, collectionWarning("limitranges", err))
 	} else {
@@ -269,7 +359,141 @@ func collectPods(pods []corev1.Pod, data *clustermode.CollectedData) {
 			continue
 		}
 		data.NamespacePodCounts[pod.Namespace]++
+
+		_, _, missing := containerRequests(&pod.Spec)
+		ownerKind, ownerName := podOwner(pod)
+		data.Pods = append(data.Pods, clustermode.Pod{
+			Name:             pod.Name,
+			Namespace:        pod.Namespace,
+			NodeName:         pod.Spec.NodeName,
+			Phase:            string(pod.Status.Phase),
+			OwnerKind:        ownerKind,
+			OwnerName:        ownerName,
+			Requests:         podRequests(&pod.Spec),
+			MissingRequests:  len(missing) > 0,
+			MissingResources: missing,
+			Claims:           podClaims(&pod.Spec),
+		})
 	}
+}
+
+// podMetricsList is the subset of the metrics.k8s.io PodMetricsList the
+// collector reads. It is decoded locally to avoid a dependency on the metrics
+// client for two fields.
+type podMetricsList struct {
+	Items []struct {
+		Metadata struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"metadata"`
+		Containers []struct {
+			Usage map[corev1.ResourceName]resource.Quantity `json:"usage"`
+		} `json:"containers"`
+	} `json:"items"`
+}
+
+// collectPodUsage reads current pod usage from metrics-server. A cluster
+// without metrics-server still produces a full snapshot, only without usage.
+func collectPodUsage(metrics listed[[]byte], data *clustermode.CollectedData) {
+	if len(data.Pods) == 0 {
+		return
+	}
+	if metrics.err != nil {
+		data.Warnings = append(data.Warnings, clustermode.Warning{
+			Resource: "pod metrics",
+			Message:  fmt.Sprintf("metrics-server is not reachable, so usage and efficiency are unavailable: %v", metrics.err),
+		})
+		return
+	}
+	if metrics.value == nil {
+		return
+	}
+	if err := applyPodMetrics(metrics.value, data.Pods); err != nil {
+		data.Warnings = append(data.Warnings, collectionWarning("pod metrics", err))
+	}
+}
+
+// podMetrics reads the raw metrics-server pod list; nil without a REST client.
+func (collector *Collector) podMetrics(ctx context.Context) ([]byte, error) {
+	client := collector.client.Discovery().RESTClient()
+	if client == nil || reflect.ValueOf(client).IsNil() {
+		return nil, nil
+	}
+	path := "/apis/metrics.k8s.io/v1beta1/pods"
+	if collector.namespace != "" {
+		path = "/apis/metrics.k8s.io/v1beta1/namespaces/" + collector.namespace + "/pods"
+	}
+	return client.Get().AbsPath(path).DoRaw(ctx)
+}
+
+// applyPodMetrics sums container usage into the matching collected pods.
+func applyPodMetrics(raw []byte, pods []clustermode.Pod) error {
+	var metrics podMetricsList
+	if err := json.Unmarshal(raw, &metrics); err != nil {
+		return fmt.Errorf("decode pod metrics: %w", err)
+	}
+
+	index := make(map[string]*clustermode.Pod, len(pods))
+	for position := range pods {
+		index[pods[position].Namespace+"/"+pods[position].Name] = &pods[position]
+	}
+	for _, item := range metrics.Items {
+		pod := index[item.Metadata.Namespace+"/"+item.Metadata.Name]
+		if pod == nil {
+			continue
+		}
+		usage := clustermode.ResourceValues{}
+		for _, container := range item.Containers {
+			if quantity, ok := container.Usage[corev1.ResourceCPU]; ok {
+				usage.CPUMilli += quantity.MilliValue()
+			}
+			if quantity, ok := container.Usage[corev1.ResourceMemory]; ok {
+				usage.MemoryBytes += quantity.Value()
+			}
+		}
+		pod.Usage = &usage
+	}
+	return nil
+}
+
+// schedulingTaints keeps the taints that stop a pod without a toleration from
+// being scheduled on the node.
+func schedulingTaints(taints []corev1.Taint) []string {
+	kept := make([]string, 0)
+	for _, taint := range taints {
+		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		kept = append(kept, fmt.Sprintf("%s=%s:%s", taint.Key, taint.Value, taint.Effect))
+	}
+	return kept
+}
+
+func podClaims(spec *corev1.PodSpec) []string {
+	claims := make([]string, 0)
+	for _, volume := range spec.Volumes {
+		if volume.PersistentVolumeClaim != nil {
+			claims = append(claims, volume.PersistentVolumeClaim.ClaimName)
+		}
+	}
+	return claims
+}
+
+// podOwner resolves the controller a pod belongs to. A Deployment's pods are
+// owned by a ReplicaSet named after the Deployment plus the pod template hash,
+// so the hash is stripped to reach the Deployment without another API call.
+func podOwner(pod *corev1.Pod) (string, string) {
+	owner := metav1.GetControllerOf(pod)
+	if owner == nil {
+		return "Pod", pod.Name
+	}
+	if owner.Kind == "ReplicaSet" {
+		hash := pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey]
+		if hash != "" && strings.HasSuffix(owner.Name, "-"+hash) {
+			return "Deployment", strings.TrimSuffix(owner.Name, "-"+hash)
+		}
+	}
+	return owner.Kind, owner.Name
 }
 
 func collectNodes(nodes []corev1.Node, pods []corev1.Pod) []clustermode.Node {
@@ -301,6 +525,7 @@ func collectNodes(nodes []corev1.Node, pods []corev1.Pod) []clustermode.Node {
 			Capacity:     resourceListValues(node.Status.Capacity),
 			Allocatable:  resourceListValues(node.Status.Allocatable),
 			Requests:     requestsByNode[node.Name],
+			Taints:       schedulingTaints(node.Spec.Taints),
 		})
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Name < result[right].Name })
@@ -330,29 +555,32 @@ func daemonSetWorkload(daemonSet *appsv1.DaemonSet) clustermode.Workload {
 func workloadFromTemplate(uid types.UID, kind, name, namespace string, desired, ready int32, spec *corev1.PodSpec) clustermode.Workload {
 	containers, perReplica, missing := containerRequests(spec)
 	return clustermode.Workload{
-		UID:             string(uid),
-		Kind:            kind,
-		Name:            name,
-		Namespace:       namespace,
-		DesiredReplicas: desired,
-		ReadyReplicas:   ready,
-		Containers:      containers,
-		Requests:        multiplyResources(perReplica, int64(desired)),
-		MissingRequests: missing,
+		UID:              string(uid),
+		Kind:             kind,
+		Name:             name,
+		Namespace:        namespace,
+		DesiredReplicas:  desired,
+		ReadyReplicas:    ready,
+		Containers:       containers,
+		Requests:         multiplyResources(perReplica, int64(desired)),
+		MissingRequests:  len(missing) > 0,
+		MissingResources: missing,
 	}
 }
 
-func containerRequests(spec *corev1.PodSpec) ([]clustermode.Container, clustermode.ResourceValues, bool) {
+// containerRequests sums the requests of the long-running containers and
+// lists the resources ("cpu", "memory") that at least one of them leaves
+// unrequested.
+func containerRequests(spec *corev1.PodSpec) ([]clustermode.Container, clustermode.ResourceValues, []string) {
 	containers := make([]clustermode.Container, 0, len(spec.Containers)+len(spec.InitContainers))
 	total := clustermode.ResourceValues{}
-	missing := false
+	missingCPU, missingMemory := false, false
 	appendContainer := func(container corev1.Container) {
 		requests := resourceListValues(container.Resources.Requests)
 		containers = append(containers, clustermode.Container{Name: container.Name, Requests: requests})
 		addResources(&total, requests)
-		if requests.CPUMilli == 0 || requests.MemoryBytes == 0 {
-			missing = true
-		}
+		missingCPU = missingCPU || requests.CPUMilli == 0
+		missingMemory = missingMemory || requests.MemoryBytes == 0
 	}
 	for _, container := range spec.Containers {
 		appendContainer(container)
@@ -361,6 +589,14 @@ func containerRequests(spec *corev1.PodSpec) ([]clustermode.Container, clustermo
 		if container.RestartPolicy != nil && *container.RestartPolicy == corev1.ContainerRestartPolicyAlways {
 			appendContainer(container)
 		}
+	}
+
+	missing := make([]string, 0, 2)
+	if missingCPU {
+		missing = append(missing, "cpu")
+	}
+	if missingMemory {
+		missing = append(missing, "memory")
 	}
 	return containers, total, missing
 }

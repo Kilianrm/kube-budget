@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 type ResourceValues struct {
 	CPUMilli     int64 `json:"cpuMilli"`
@@ -36,7 +36,30 @@ type Workload struct {
 	ReadyReplicas   int32          `json:"readyReplicas"`
 	Containers      []Container    `json:"containers"`
 	Requests        ResourceValues `json:"requests"`
-	MissingRequests bool           `json:"missingRequests"`
+	// MissingRequests marks incomplete requests: some container leaves CPU or
+	// memory unrequested. MissingResources says which.
+	MissingRequests  bool     `json:"missingRequests"`
+	MissingResources []string `json:"missingResources,omitempty"`
+}
+
+// Pod is one scheduled or pending pod and the controller that owns it. Pods are
+// what nodes actually run, so they link a workload's requests to the price of
+// the node that pays for them.
+type Pod struct {
+	Name             string         `json:"name"`
+	Namespace        string         `json:"namespace"`
+	NodeName         string         `json:"nodeName,omitempty"`
+	Phase            string         `json:"phase"`
+	OwnerKind        string         `json:"ownerKind"`
+	OwnerName        string         `json:"ownerName"`
+	Requests         ResourceValues `json:"requests"`
+	MissingRequests  bool           `json:"missingRequests"`
+	MissingResources []string       `json:"missingResources,omitempty"`
+	// Usage is the pod's observed CPU and memory from metrics-server; nil when
+	// metrics are unavailable or the pod has not been sampled yet.
+	Usage *ResourceValues `json:"usage,omitempty"`
+	// Claims are the persistent volume claims the pod mounts.
+	Claims []string `json:"claims,omitempty"`
 }
 
 type Resource struct {
@@ -63,6 +86,8 @@ type Node struct {
 	Capacity     ResourceValues `json:"capacity"`
 	Allocatable  ResourceValues `json:"allocatable"`
 	Requests     ResourceValues `json:"requests"`
+	// Taints lists the NoSchedule and NoExecute taints as key=value:Effect.
+	Taints []string `json:"taints,omitempty"`
 }
 
 type NamespaceSummary struct {
@@ -135,6 +160,7 @@ type Snapshot struct {
 	Summary       Summary            `json:"summary"`
 	Nodes         []Node             `json:"nodes"`
 	Workloads     []Workload         `json:"workloads"`
+	Pods          []Pod              `json:"pods"`
 	Resources     []Resource         `json:"resources"`
 	Namespaces    []NamespaceSummary `json:"namespaces"`
 	Warnings      []Warning          `json:"warnings"`
@@ -145,6 +171,7 @@ type CollectedData struct {
 	Cluster            ClusterInfo
 	Nodes              []Node
 	Workloads          []Workload
+	Pods               []Pod
 	Resources          []Resource
 	NamespacePodCounts map[string]int
 	Warnings           []Warning
@@ -175,6 +202,7 @@ func (service *Service) Snapshot(ctx context.Context) (Snapshot, error) {
 		Cluster:       data.Cluster,
 		Nodes:         append([]Node{}, data.Nodes...),
 		Workloads:     append([]Workload{}, data.Workloads...),
+		Pods:          append([]Pod{}, data.Pods...),
 		Resources:     append([]Resource{}, data.Resources...),
 		Warnings:      append([]Warning{}, data.Warnings...),
 	}
