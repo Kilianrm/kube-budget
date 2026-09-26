@@ -1,0 +1,10 @@
+# The showcase workloads. Each file tells one part of the KubeBudget story;
+# see ../README.md for what every workload is meant to show.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - storage.yaml
+  - shop.yaml
+  - batch.yaml
+  - platform.yaml

@@ -1,0 +1,27 @@
+# What-if demo: a small service that fits in capacity the showcase cluster
+# already pays for. Estimate it in Manifest mode with "Connected cluster":
+# +$0 billed, less idle capacity, and one saving leaves the plan.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loyalty-api
+  namespace: shop
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: loyalty-api
+  template:
+    metadata:
+      labels:
+        app: loyalty-api
+    spec:
+      containers:
+        - name: api
+          image: nginx:1.27-alpine
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              memory: 512Mi

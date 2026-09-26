@@ -1,0 +1,22 @@
+# Three namespaces give the allocation table and "What changed?" distinct
+# consumers: a product, batch processing and platform tooling.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+  labels:
+    purpose: kube-budget-showcase
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: batch
+  labels:
+    purpose: kube-budget-showcase
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform
+  labels:
+    purpose: kube-budget-showcase

@@ -1,0 +1,30 @@
+# Scenario: a workload without resource requests. KubeBudget cannot attribute
+# its cost, lists it under "Fix first" in Optimizations, and holds back the
+# node-level steps until it is fixed. Turn it on and off with:
+#   ./showcase.sh scenario missing-requests on|off
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: legacy
+  labels:
+    purpose: kube-budget-showcase
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legacy-reporting
+  namespace: legacy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: legacy-reporting
+  template:
+    metadata:
+      labels:
+        app: legacy-reporting
+    spec:
+      containers:
+        - name: reporting
+          image: busybox:1.36
+          command: ["/bin/sh", "-c", "while true; do sleep 60; done"]

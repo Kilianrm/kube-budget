@@ -1,0 +1,68 @@
+# KubeBudget showcase cluster.
+#
+# Every choice here exists to give a KubeBudget view something to show:
+#   - two node groups with different machine types and purchase options, so the
+#     explorer splits billed cost by node group and the plan sees on-demand and
+#     spot capacity side by side;
+#   - machine types from the KubeBudget price catalog (us-east-1), so every node
+#     is priced;
+#   - memory-rich m6i nodes under CPU-heavy requests, so the node-type step has
+#     a better fit (c6i) to propose.
+#
+# The two groups use different instance types on purpose: KubeBudget matches a
+# node to its node group through the instance type.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: kube-budget-showcase
+  region: us-east-1
+  tags:
+    project: kube-budget
+    purpose: showcase
+
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
+
+iam:
+  withOIDC: true
+
+# Nodes run in public subnets, so a NAT gateway would only add ~$33/month.
+vpc:
+  nat:
+    gateway: Disable
+
+managedNodeGroups:
+  - name: general
+    instanceType: m6i.large
+    desiredCapacity: 3
+    minSize: 2
+    maxSize: 4
+    volumeSize: 20
+    volumeType: gp3
+    amiFamily: AmazonLinux2023
+    privateNetworking: false
+    labels:
+      workload-tier: general
+
+  - name: batch-spot
+    instanceTypes: ["c6i.large"]
+    spot: true
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 2
+    volumeSize: 20
+    volumeType: gp3
+    amiFamily: AmazonLinux2023
+    privateNetworking: false
+    labels:
+      workload-tier: batch
+    taints:
+      - key: workload-tier
+        value: batch
+        effect: NoSchedule
+
+addons:
+  - name: aws-ebs-csi-driver
+    wellKnownPolicies:
+      ebsCSIController: true

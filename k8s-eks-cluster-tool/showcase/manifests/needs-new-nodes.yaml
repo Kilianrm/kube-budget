@@ -1,0 +1,27 @@
+# What-if demo: a service whose pods are too large for the room left on the
+# showcase nodes. It requests about $50/month of capacity, yet the cluster
+# needs two more whole m6i.large nodes to run it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-indexer
+  namespace: shop
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: search-indexer
+  template:
+    metadata:
+      labels:
+        app: search-indexer
+    spec:
+      containers:
+        - name: indexer
+          image: nginx:1.27-alpine
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              memory: 2Gi

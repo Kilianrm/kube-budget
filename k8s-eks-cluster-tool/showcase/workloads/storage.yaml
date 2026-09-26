@@ -1,0 +1,55 @@
+# gp3 volumes provisioned by the EBS CSI driver. WaitForFirstConsumer means a
+# claim gets a disk only once a pod mounts it.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: showcase-gp3
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+---
+# Story: an orphan volume. A one-off Job wrote a backup to this claim and
+# finished. The claim stays Bound and billed, but no running pod mounts it,
+# so the optimization plan proposes deleting it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: old-backup
+  namespace: shop
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: showcase-gp3
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: write-old-backup
+  namespace: shop
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: backup
+          image: busybox:1.36
+          command: ["/bin/sh", "-c", "date > /backup/taken-at && echo backup written"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: backup
+              mountPath: /backup
+      volumes:
+        - name: backup
+          persistentVolumeClaim:
+            claimName: old-backup
