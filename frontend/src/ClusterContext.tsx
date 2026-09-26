@@ -16,7 +16,8 @@ export interface ClusterConnection {
   apiServerUrl?: string;
   namespace: string;
   readOnly: boolean;
-  refreshIntervalMs: number | null;
+  /** How often cluster and cost data refresh in the background; always on. */
+  refreshIntervalMs: number;
   connectedAt: number;
   server?: string;
   version?: string;

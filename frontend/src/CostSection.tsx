@@ -1,72 +1,42 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   AlertCircle,
   CircleDollarSign,
   Clock,
   Cpu,
-  HardDrive,
-  Layers3,
   Lightbulb,
   LoaderCircle,
   PlugZap,
-  RefreshCw,
-  Server,
-  ServerCog,
+  CloudOff,
+  Wallet,
+  FlaskConical,
 } from "lucide-react";
-import { getCostReport, getCostTrend, CostLineItem, CostProjection, CostRecommendation, CostReport, CostReportResult, CostTrend } from "./backend";
+import { CostAllocationRow, CostProjection, CostReport, CostSeries, CostTrend } from "./backend";
+import { defaultHistoryWindow, historyWindows, useCostTrend } from "./costHistoryCache";
 import { useCluster } from "./ClusterContext";
+import { useCostReport } from "./CostReportContext";
+import { BudgetForecastView } from "./BudgetForecast";
+import { OptimizationsView } from "./Optimizations";
+import { formatMoney, hoursPerMonth } from "./costFormat";
+import { Segmented } from "./Segmented";
+import { DataFreshness } from "./DataFreshness";
+import { useClusterSnapshot } from "./ClusterSnapshotContext";
 
-type CostView = "explorer" | "trend" | "optimize";
-type CostWindow = "hourly" | "daily" | "monthly";
+type CostView = "explorer" | "budget" | "optimize";
 
-const windowLabels: Record<CostWindow, string> = {
-  hourly: "Per hour",
-  daily: "Per day",
-  monthly: "Per month",
+const viewTitles: Record<CostView, { title: string; description: string }> = {
+  explorer: { title: "Cost explorer", description: "Where the bill goes, how it changes over time, and how much of it nobody requests." },
+  budget: { title: "Budget & forecast", description: "Where this month is heading against its budget, and what moved the bill." },
+  optimize: { title: "Optimizations", description: "One plan from today's bill to the optimized bill: what to change, what it saves, and how risky it is." },
 };
 
 const emptyProjection: CostProjection = { hourly: 0, daily: 0, monthly: 0, yearly: 0 };
 
-export function CostSection({ onConnectClick }: { onConnectClick: () => void }) {
-  const { isConnected, clusterConnection } = useCluster();
+export function CostSection({ onConnectClick, onTestWorkload }: { onConnectClick: () => void; onTestWorkload: () => void }) {
+  const { isConnected } = useCluster();
+  const { report, isLoading, error, setOptimization } = useCostReport();
+  const { snapshot } = useClusterSnapshot();
   const [view, setView] = useState<CostView>("explorer");
-  const [timeWindow, setTimeWindow] = useState<CostWindow>("monthly");
-  const [report, setReport] = useState<CostReportResult | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const refresh = useCallback(async () => {
-    if (!clusterConnection?.context) {
-      setError("The connected cluster does not have a kubeconfig context.");
-      return;
-    }
-    setIsLoading(true);
-    setError("");
-    try {
-      const nextReport = await getCostReport(
-        clusterConnection.kubeconfigPath ?? "",
-        clusterConnection.context,
-        clusterConnection.namespace,
-        clusterConnection.provider === "aws-eks" ? {
-          name: "aws-eks",
-          clusterName: clusterConnection.clusterName ?? clusterConnection.name,
-          region: clusterConnection.region ?? "",
-          profile: clusterConnection.profile ?? "default",
-          roleArn: clusterConnection.roleArn ?? "",
-        } : undefined,
-        { region: clusterConnection.region ?? "" },
-      );
-      setReport(nextReport);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [clusterConnection?.context, clusterConnection?.kubeconfigPath, clusterConnection?.namespace, clusterConnection?.provider, clusterConnection?.clusterName, clusterConnection?.name, clusterConnection?.region, clusterConnection?.profile, clusterConnection?.roleArn]);
-
-  useEffect(() => {
-    if (isConnected()) void refresh();
-  }, [isConnected, refresh]);
 
   if (!isConnected()) {
     return (
@@ -83,12 +53,31 @@ export function CostSection({ onConnectClick }: { onConnectClick: () => void }) 
     );
   }
 
+  // Costs come from a cloud's public price list; the snapshot says whether
+  // this cluster runs somewhere we can price.
+  const platform = snapshot?.platform;
+  if (platform && !platform.supported) {
+    return (
+      <section className="cluster-workspace cluster-locked">
+        <div className="cluster-locked-content">
+          <div className="locked-visual" aria-hidden="true"><div className="locked-icon"><CloudOff size={48} /></div></div>
+          <h2>Costs are not available for this cluster</h2>
+          <p>Cost figures come from the public price lists of AWS, Google Cloud and Azure. This cluster cannot be priced because {platform.reason}.</p>
+          <p className="locked-hint">The Cluster section and catalog pricing in Manifest still work. To see costs, connect a cluster that runs on a supported cloud.</p>
+          <button className="primary-button" type="button" onClick={onConnectClick}>
+            <PlugZap size={18} /><span>Connect a different cluster</span>
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <>
       <aside className="cluster-sidebar" aria-label="Cost workspace options">
         <span className="sidebar-label">COST</span>
         <button type="button" className={view === "explorer" ? "active" : ""} onClick={() => setView("explorer")}><CircleDollarSign size={16} /><span>Cost explorer</span></button>
-        <button type="button" className={view === "trend" ? "active" : ""} onClick={() => setView("trend")}><Clock size={16} /><span>History</span></button>
+        <button type="button" className={view === "budget" ? "active" : ""} onClick={() => setView("budget")}><Wallet size={16} /><span>Budget &amp; forecast</span></button>
         <button type="button" className={view === "optimize" ? "active" : ""} onClick={() => setView("optimize")}><Lightbulb size={16} /><span>Optimizations</span></button>
         <div className="cluster-sidebar-spacer" />
       </aside>
@@ -96,215 +85,431 @@ export function CostSection({ onConnectClick }: { onConnectClick: () => void }) 
         <div className="management-header">
           <div>
             <span className="step-label">COST / {view.toUpperCase()}</span>
-            <h1>{view === "explorer" ? "Cost explorer" : view === "trend" ? "Recorded history" : "Optimizations"}</h1>
-            <p>{view === "explorer"
-              ? "Compare what the provider bills against what the workloads request."
-              : view === "trend"
-                ? "Spend measured from recorded captures, with the periods that were never captured left empty."
-                : "Turn the gap between billed and requested capacity into actions."}</p>
+            <h1>{viewTitles[view].title}</h1>
+            <p>{viewTitles[view].description}</p>
           </div>
           <div className="management-actions">
-            {view !== "trend" && <div className="mode-selector" role="group" aria-label="Time window">
-              {(Object.keys(windowLabels) as CostWindow[]).map((option) => (
-                <button key={option} type="button" className={`mode-button ${timeWindow === option ? "active" : ""}`} onClick={() => setTimeWindow(option)}>
-                  <span><strong>{option === "hourly" ? "Hour" : option === "daily" ? "Day" : "Month"}</strong></span>
-                </button>
-              ))}
-            </div>}
-            <button type="button" className="refresh-button" onClick={refresh} disabled={isLoading} title="Recalculate cost report" aria-label="Recalculate cost report">
-              <RefreshCw className={isLoading ? "spin" : ""} size={15} />
+            <button type="button" className="secondary-button test-workload-button" onClick={onTestWorkload} title="Simulate deploying a manifest on this cluster">
+              <FlaskConical size={14} /> Test a workload
             </button>
-            <span className="cluster-data-badge"><span /> {report ? `Priced / ${new Date(report.report.generatedAt).toLocaleTimeString()}` : "Waiting for data"}</span>
+            <DataFreshness updatedAt={report ? String(report.report.generatedAt) : null} isRefreshing={isLoading} failed={Boolean(error && report)} />
           </div>
         </div>
 
         {error && <div className="error-message"><AlertCircle size={16} /><span>{error}</span></div>}
         {!report && isLoading && <div className="cluster-screen-content"><section className="cluster-panel"><div className="panel-footnote"><LoaderCircle className="spin" size={15} /> Collecting and pricing cluster resources...</div></section></div>}
-        {report && view === "explorer" && <CostExplorerView report={report.report} timeWindow={timeWindow} />}
-        {report && view === "trend" && <CostTrendView clusterId={report.clusterId} currency={report.report.currency} />}
-        {report && view === "optimize" && <OptimizationView report={report.report} recommendations={report.recommendations ?? []} timeWindow={timeWindow} />}
+        {report && view === "explorer" && <CostExplorerView report={report.report} clusterId={report.clusterId} onShowChanges={() => setView("budget")} />}
+        {report && view === "budget" && <BudgetForecastView report={report.report} clusterId={report.clusterId} />}
+        {report && view === "optimize" && <OptimizationsView report={report.report} clusterId={report.clusterId} optimization={report.optimization} onChange={setOptimization} />}
       </section>
     </>
   );
 }
 
-function CostExplorerView({ report, timeWindow }: { report: CostReport; timeWindow: CostWindow }) {
+type AllocationGroup = "namespace" | "workload";
+
+const billSegments = [
+  { key: "workloads", label: "Workload requests", color: "#2a78d6" },
+  { key: "volumes", label: "Persistent volumes", color: "#1baf7a" },
+  { key: "idle", label: "Idle node capacity", color: "#eb6834" },
+  { key: "shared", label: "Shared cluster costs", color: "#4a3aa7" },
+] as const;
+
+function CostExplorerView({ report, clusterId, onShowChanges }: { report: CostReport; clusterId: string; onShowChanges: () => void }) {
+  const [group, setGroup] = useState<AllocationGroup>("namespace");
   const provisioned = totalFor(report, "provisioned");
   const requested = totalFor(report, "requested");
   const idle = report.idle ?? emptyProjection;
-  const coverage = provisioned.hourly > 0 ? Math.round((requested.hourly / provisioned.hourly) * 100) : 0;
+  const shared = report.shared ?? emptyProjection;
+  const billedKinds = dimension(report, "provisioned", "subjectKind");
+  const volumes = billedKinds.volume ?? emptyProjection;
+  const allocated = requested.hourly + volumes.hourly;
+  const share = (hourly: number) => (provisioned.hourly > 0 ? Math.round((hourly / provisioned.hourly) * 100) : 0);
+  const items = report.items ?? [];
+  const nodeCount = items.filter((item) => item.subject.kind === "node").length;
+  const volumeCount = items.filter((item) => item.subject.kind === "volume").length;
+  const idleShare = share(idle.hourly);
 
   return (
     <div className="cluster-screen-content">
       <div className="cluster-metrics">
-        <CostMetric label="Billed infrastructure" projection={provisioned} timeWindow={timeWindow} currency={report.currency} detail="Nodes, control plane and volumes" />
-        <CostMetric label="Requested by workloads" projection={requested} timeWindow={timeWindow} currency={report.currency} detail="Priced from resource requests" />
-        <CostMetric label="Idle capacity" projection={idle} timeWindow={timeWindow} currency={report.currency} detail="Billed but not requested" tone={idle.hourly > 0 ? "warning" : "good"} />
-        <div className="cluster-metric neutral">
-          <span>Request coverage</span>
-          <strong>{coverage}%</strong>
-          <small>of billed capacity is requested</small>
-        </div>
+        <CostMetric label="Billed infrastructure" projection={provisioned} currency={report.currency} detail={`${nodeCount} node${nodeCount === 1 ? "" : "s"}${shared.hourly > 0 ? " · control plane" : ""}${volumeCount > 0 ? ` · ${volumeCount} volume${volumeCount === 1 ? "" : "s"}` : ""}`} />
+        <CostMetric label="Allocated to workloads" projection={projectHourly(allocated, provisioned)} currency={report.currency} detail={`${share(allocated)}% of the bill · requests and volumes`} tone="neutral" />
+        <CostMetric label="Idle node capacity" projection={idle} currency={report.currency} detail={`${idleShare}% of the bill is requested by nobody`} tone={idleShare > 30 ? "warning" : "good"} />
+        <CostMetric label="Shared cluster costs" projection={shared} currency={report.currency} detail="Control plane · not attributable to a team" />
       </div>
 
+      <SpendOverTime clusterId={clusterId} currency={report.currency} capturedAt={String(report.generatedAt)} onShowChanges={onShowChanges} />
+
       <section className="cluster-panel">
-        <PanelTitle title="Billed cost by resource type" />
-        <CostBars buckets={dimension(report, "subjectKind")} timeWindow={timeWindow} currency={report.currency} />
+        <PanelTitle title="Where the bill goes" />
+        <BillBar
+          values={{ workloads: requested.hourly, volumes: volumes.hourly, idle: idle.hourly, shared: shared.hourly }}
+          total={provisioned}
+         
+          currency={report.currency}
+        />
       </section>
 
       <section className="cluster-panel">
-        <PanelTitle title="Requested cost by namespace" />
-        <CostBars buckets={dimension(report, "namespace")} timeWindow={timeWindow} currency={report.currency} />
-      </section>
-
-      <section className="cluster-panel">
-        <PanelTitle title="Cost by component" />
-        <div className="cost-line-group">
-          {componentRows(report).map((row) => (
-            <div className="cost-line" key={row.key}>
-              <div>
-                <span className="cost-line-icon">{row.icon}</span>
-                <span>{row.label}</span>
-                <strong>{formatMoney(pick(row.projection, timeWindow), report.currency)}</strong>
-              </div>
-              <div className="capacity-track"><span style={{ width: `${row.share}%` }} /></div>
-            </div>
-          ))}
+        <PanelTitle title="Node capacity by resource" />
+        <ResourceEfficiency report={report} />
+        <div className="panel-footnote">
+          <Cpu size={14} /> {report.usage
+            ? `Used is one metrics-server sample priced at the same node rates${report.usage.withoutUsage > 0 ? `; ${report.usage.withoutUsage} workload${report.usage.withoutUsage === 1 ? " has" : "s have"} no sample yet and count as requested only` : ""}. Requested but unused capacity is fixed by lowering requests; idle capacity by fewer or smaller nodes.`
+            : "Requested is what pods reserve, not what they use; install metrics-server to compare with actual usage. Idle capacity is fixed by fewer or smaller nodes."}
         </div>
       </section>
-
-      <section className="cluster-panel">
-        <PanelTitle title="Largest line items" />
-        <div className="cluster-table-wrap">
-          <table className="cluster-table">
-            <thead><tr><th>Subject</th><th>Type</th><th>Basis</th><th>{windowLabels[timeWindow]}</th><th>Confidence</th></tr></thead>
-            <tbody>
-              {topItems(report).map((item) => (
-                <tr key={`${item.subject.kind}-${item.subject.id || item.subject.name}`}>
-                  <td><strong>{item.subject.name}</strong>{item.subject.namespace && <small className="system-namespace-label">{item.subject.namespace}</small>}</td>
-                  <td>{item.subject.kind}</td>
-                  <td>{item.basis}</td>
-                  <td className="cost-cell">{item.confidence === "unknown" ? "Unknown" : formatMoney(pick(item.cost, timeWindow), report.currency)}</td>
-                  <td><span className={item.confidence === "exact" ? "status-good" : "status-warning"}>{item.confidence}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <AssumptionsPanel report={report} />
-    </div>
-  );
-}
-
-function CostTrendView({ clusterId, currency }: { clusterId: string; currency: string }) {
-  const [days, setDays] = useState(7);
-  const [trend, setTrend] = useState<CostTrend | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    setError("");
-    getCostTrend(clusterId, days, days > 2 ? "day" : "hour")
-      .then((result) => { if (!cancelled) setTrend(result); })
-      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); })
-      .finally(() => { if (!cancelled) setIsLoading(false); });
-    return () => { cancelled = true; };
-  }, [clusterId, days]);
-
-  if (error) return <div className="cluster-screen-content"><div className="error-message"><AlertCircle size={16} /><span>{error}</span></div></div>;
-  if (!trend) return <div className="cluster-screen-content"><section className="cluster-panel"><div className="panel-footnote"><LoaderCircle className="spin" size={15} /> Reading recorded captures...</div></section></div>;
-
-  const coverage = trend.windowHours > 0 ? Math.round((trend.coveredHours / trend.windowHours) * 100) : 0;
-  const points = trend.points ?? [];
-  const highest = points.reduce((maximum, point) => Math.max(maximum, point.provisionedUSD), 0);
-
-  return (
-    <div className="cluster-screen-content">
-      <div className="cluster-metrics">
-        <div className="cluster-metric neutral"><span>Recorded billed spend</span><strong>{formatMoney(trend.totalProvisionedUSD, currency)}</strong><small>Over the captured periods only</small></div>
-        <div className="cluster-metric neutral"><span>Recorded requested spend</span><strong>{formatMoney(trend.totalRequestedUSD, currency)}</strong><small>Priced from resource requests</small></div>
-        <div className="cluster-metric warning"><span>Recorded idle</span><strong>{formatMoney(trend.totalIdleUSD, currency)}</strong><small>Billed but not requested</small></div>
-        <div className={`cluster-metric ${coverage > 70 ? "good" : "warning"}`}><span>Window coverage</span><strong>{coverage}%</strong><small>{trend.coveredHours.toFixed(1)} of {trend.windowHours.toFixed(0)} hours captured</small></div>
-      </div>
 
       <section className="cluster-panel">
         <div className="cluster-panel-heading">
-          <h2>Spend per {trend.bucket}</h2>
-          <div className="mode-selector" role="group" aria-label="History window">
-            {[1, 7, 30].map((option) => (
-              <button key={option} type="button" className={`mode-button ${days === option ? "active" : ""}`} onClick={() => setDays(option)} disabled={isLoading}>
-                <span><strong>{option === 1 ? "24h" : `${option}d`}</strong></span>
-              </button>
-            ))}
-          </div>
+          <h2>Allocation</h2>
+          <Segmented label="Group allocation by" value={group} onChange={setGroup} options={[{ value: "namespace", label: "Namespace" }, { value: "workload", label: "Workload" }]} />
         </div>
-        {points.length === 0 || highest === 0
-          ? <div className="panel-footnote"><AlertCircle size={14} /> Nothing recorded in this window yet. Captures are written every time a cost report runs.</div>
-          : <div className="namespace-bars">
-            {points.map((point) => {
-              const covered = point.bucketHours > 0 ? point.coveredHours / point.bucketHours : 0;
-              return (
-                <div className="namespace-bar" key={point.start as unknown as string}>
-                  <div>
-                    <span className="namespace-name">
-                      {new Date(point.start).toLocaleString(undefined, trend.bucket === "day" ? { month: "short", day: "numeric" } : { hour: "2-digit", minute: "2-digit" })}
-                      {covered === 0 && <small className="system-namespace-label">No data captured</small>}
-                      {covered > 0 && covered < 0.9 && <small className="system-namespace-label">{Math.round(covered * 100)}% captured</small>}
-                    </span>
-                    <strong>{covered === 0 ? "-" : formatMoney(point.provisionedUSD, currency)}</strong>
-                  </div>
-                  <div className="capacity-track"><span style={{ width: `${Math.round((point.provisionedUSD / highest) * 100)}%` }} /></div>
-                </div>
-              );
-            })}
-          </div>}
-        <div className="panel-footnote">
-          <AlertCircle size={14} /> Each capture's rate is integrated over the time it stayed valid. Periods with no capture are shown empty rather than estimated, so totals are what was observed, not a full-month bill.
-        </div>
+        <AllocationTable report={report} group={group} />
       </section>
+
+      <section className="cluster-panel">
+        <PanelTitle title="Billed infrastructure by node group" />
+        <CostBars buckets={nodeGroupBuckets(report)} currency={report.currency} />
+      </section>
+
+      <AssumptionsPanel report={report} />
     </div>
   );
 }
 
-function OptimizationView({ report, recommendations, timeWindow }: { report: CostReport; recommendations: CostRecommendation[]; timeWindow: CostWindow }) {
-  const provisioned = totalFor(report, "provisioned");
-  const idle = report.idle ?? emptyProjection;
-  const idleShare = provisioned.hourly > 0 ? Math.round((idle.hourly / provisioned.hourly) * 100) : 0;
-  const identified = recommendations.reduce((total, recommendation) => total + (recommendation.savings?.hourly ?? 0), 0);
-  const blockers = recommendations.filter((recommendation) => recommendation.severity === "blocker").length;
+function BillBar({ values, total, currency }: { values: Record<(typeof billSegments)[number]["key"], number>; total: CostProjection; currency: string }) {
+  const [focused, setFocused] = useState<string | null>(null);
+  const segments = billSegments
+    .map((segment) => ({ ...segment, hourly: values[segment.key] }))
+    .filter((segment) => segment.hourly > 0);
+  if (total.hourly <= 0 || segments.length === 0) {
+    return <div className="panel-footnote"><AlertCircle size={14} /> Nothing billed was priced in this report.</div>;
+  }
+
+  const scale = monthly(total) / total.hourly;
+  const percent = (hourly: number) => (hourly / total.hourly) * 100;
+  const active = segments.find((segment) => segment.key === focused);
 
   return (
-    <div className="cluster-screen-content">
-      <div className="cluster-metrics">
-        <CostMetric label="Identified savings" projection={projectionOfSavings(recommendations)} timeWindow={timeWindow} currency={report.currency} detail={`${recommendations.length} finding${recommendations.length === 1 ? "" : "s"}`} tone={identified > 0 ? "warning" : "good"} />
-        <CostMetric label="Idle capacity" projection={idle} timeWindow={timeWindow} currency={report.currency} detail={`${idleShare}% of the bill is not requested`} tone={idleShare > 40 ? "warning" : "neutral"} />
-        <CostMetric label="Billed infrastructure" projection={provisioned} timeWindow={timeWindow} currency={report.currency} detail="Baseline the savings are measured against" />
-        <div className={`cluster-metric ${blockers > 0 ? "warning" : "good"}`}>
-          <span>Data blockers</span>
-          <strong>{blockers}</strong>
-          <small>{blockers > 0 ? "Savings below are a lower bound" : "The report is complete"}</small>
+    <div className="bill-breakdown">
+      <div className="bill-readout" aria-live="polite">
+        {active
+          ? <><span className="bill-swatch" style={{ background: active.color }} />{active.label} · <strong>{formatMoney(active.hourly * scale, currency)}</strong> · {percent(active.hourly).toFixed(1)}% of the bill</>
+          : <>Total billed · <strong>{formatMoney(monthly(total), currency)}</strong> per month</>}
+      </div>
+      <div className="bill-bar" role="img" aria-label={segments.map((segment) => `${segment.label} ${percent(segment.hourly).toFixed(0)}%`).join(", ")}>
+        {segments.map((segment) => (
+          <span
+            key={segment.key}
+            className={focused && focused !== segment.key ? "dimmed" : ""}
+            style={{ flexGrow: segment.hourly, background: segment.color }}
+            onMouseEnter={() => setFocused(segment.key)}
+            onMouseLeave={() => setFocused(null)}
+          />
+        ))}
+      </div>
+      <div className="bill-legend">
+        {segments.map((segment) => (
+          <button
+            type="button"
+            key={segment.key}
+            className={focused === segment.key ? "active" : ""}
+            onMouseEnter={() => setFocused(segment.key)}
+            onMouseLeave={() => setFocused(null)}
+            onFocus={() => setFocused(segment.key)}
+            onBlur={() => setFocused(null)}
+          >
+            <span className="bill-swatch" style={{ background: segment.color }} />
+            <span>{segment.label}</span>
+            <strong>{formatMoney(segment.hourly * scale, currency)}</strong>
+            <small>{percent(segment.hourly).toFixed(0)}%</small>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ResourceEfficiency({ report}: { report: CostReport }) {
+  const billed = dimension(report, "provisioned", "component");
+  const idle = (report.idleByComponent ?? {}) as Record<string, CostProjection>;
+  const used = (report.usage?.used ?? {}) as Record<string, CostProjection>;
+  const hasUsage = Boolean(report.usage);
+  const rows = (["cpu", "memory", "gpu"] as const)
+    .map((component) => {
+      const total = billed[component]?.hourly ?? 0;
+      const unused = Math.min(idle[component]?.hourly ?? 0, total);
+      const requested = total - unused;
+      return { component, total, requested, unused, used: Math.min(used[component]?.hourly ?? 0, requested) };
+    })
+    .filter((row) => row.total > 0);
+
+  if (rows.length === 0) {
+    return <div className="panel-footnote"><AlertCircle size={14} /> Node prices could not be split by resource.</div>;
+  }
+
+  // Every component shares the same window ratio, taken from a backend projection.
+  const reference = billed[rows[0].component];
+  const scale = (hourly: number) => hourly * (monthly(reference) / reference.hourly);
+  const percentOf = (part: number, whole: number) => Math.round((part / whole) * 100);
+  return (
+    <>
+      <div className="namespace-bars">
+        {rows.map((row) => (
+          <div className="namespace-bar" key={row.component}>
+            <div>
+              <span className="namespace-name">
+                {componentLabels[row.component]} · {percentOf(row.requested, row.total)}% requested{hasUsage && ` · ${percentOf(row.used, row.total)}% used`}
+              </span>
+              <strong>{formatMoney(scale(row.requested), report.currency)}<small>of {formatMoney(scale(row.total), report.currency)} · {formatMoney(scale(row.unused), report.currency)} idle</small></strong>
+            </div>
+            <div className="split-track" title={hasUsage ? `${percentOf(row.used, row.total)}% used, ${percentOf(row.requested - row.used, row.total)}% requested but unused, ${percentOf(row.unused, row.total)}% idle` : `${percentOf(row.requested, row.total)}% requested, ${percentOf(row.unused, row.total)}% idle`}>
+              {hasUsage
+                ? <>
+                  {row.used > 0 && <span style={{ flexGrow: row.used, background: "#2a78d6" }} />}
+                  {row.requested - row.used > 0 && <span className="hatched-requested" style={{ flexGrow: row.requested - row.used }} />}
+                </>
+                : row.requested > 0 && <span style={{ flexGrow: row.requested, background: "#2a78d6" }} />}
+              {row.unused > 0 && <span style={{ flexGrow: row.unused, background: "#eb6834" }} />}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="capacity-legend">
+        {hasUsage
+          ? <><span><i style={{ background: "#2a78d6" }} /> Used</span><span><i className="hatched-requested" /> Requested, not used</span></>
+          : <span><i style={{ background: "#2a78d6" }} /> Requested</span>}
+        <span><i style={{ background: "#eb6834" }} /> Idle</span>
+      </div>
+    </>
+  );
+}
+
+const allocationPageSize = 15;
+
+function AllocationTable({ report, group}: { report: CostReport; group: AllocationGroup }) {
+  const [showAll, setShowAll] = useState(false);
+  const rows = report.allocation?.[group] ?? [];
+  const provisioned = totalFor(report, "provisioned");
+  const itemsById = new Map((report.items ?? []).map((item) => [item.subject.id, item]));
+
+  if (rows.length === 0) {
+    return <div className="panel-footnote"><AlertCircle size={14} /> Nothing to allocate in this report.</div>;
+  }
+
+  const consumers = rows.filter((row) => row.kind === "consumer");
+  const closing = rows.filter((row) => row.kind !== "consumer");
+  const visible = showAll ? consumers : consumers.slice(0, allocationPageSize);
+  const hidden = consumers.slice(visible.length);
+  const hiddenTotal = hidden.reduce((total, row) => total + monthly(row.cost), 0);
+  const unpriced = consumers.reduce((total, row) => total + row.unpriced, 0);
+  const component = (row: CostAllocationRow, name: string) => {
+    const value = monthly(row.components?.[name] ?? emptyProjection);
+    return value > 0 ? formatMoney(value, report.currency) : "-";
+  };
+  const hasUsage = Boolean(report.usage);
+  const efficiency = (row: CostAllocationRow) => {
+    const cpu = row.efficiency?.cpu;
+    const memory = row.efficiency?.memory;
+    if (cpu === undefined && memory === undefined) return "-";
+    const format = (value?: number) => (value === undefined ? "-" : `${Math.round(value * 100)}%`);
+    return `CPU ${format(cpu)} · Mem ${format(memory)}`;
+  };
+  const share = (row: CostAllocationRow) => (provisioned.hourly > 0 ? `${((row.cost.hourly / provisioned.hourly) * 100).toFixed(1)}%` : "-");
+
+  const renderRow = (row: CostAllocationRow) => {
+    const item = itemsById.get(row.key);
+    const kind = row.kind === "consumer" && group === "workload"
+      ? (row.subjectKind === "volume" ? "PersistentVolumeClaim" : String(item?.detail?.kind ?? "Workload"))
+      : "";
+    return (
+      <tr key={row.key} className={row.kind !== "consumer" ? `allocation-${row.kind}` : ""}>
+        <td>
+          <strong>{row.name}</strong>
+          {row.kind === "consumer" && group === "workload" && <small>{kind} · {row.namespace}</small>}
+          {row.kind === "consumer" && group === "namespace" && <small>{row.items} item{row.items === 1 ? "" : "s"}</small>}
+          {row.kind === "idle" && <small>Billed node capacity no pod requests</small>}
+          {row.kind === "shared" && <small>Control plane and other cluster-wide fees</small>}
+        </td>
+        <td className="numeric-cell">{component(row, "cpu")}</td>
+        <td className="numeric-cell">{component(row, "memory")}</td>
+        <td className="numeric-cell">{component(row, "storage")}</td>
+        <td className="cost-cell">{row.confidence === "unknown" ? "Unknown" : formatMoney(monthly(row.cost), report.currency)}</td>
+        <td className="numeric-cell">{share(row)}</td>
+        {hasUsage && <td className="numeric-cell">{row.kind === "consumer" ? efficiency(row) : ""}</td>}
+        <td>
+          {row.unpriced > 0
+            ? <span className="status-warning"><AlertCircle size={12} /> {row.unpriced} unpriced</span>
+            : <span className={row.confidence === "exact" ? "status-good" : "status-warning"}>{row.confidence}</span>}
+        </td>
+      </tr>
+    );
+  };
+
+  return (
+    <>
+      <div className="cluster-table-wrap">
+        <table className="cluster-table allocation-table">
+          <thead><tr><th>{group === "namespace" ? "Namespace" : "Workload"}</th><th>CPU</th><th>Memory</th><th>Storage</th><th>Monthly</th><th>Of bill</th>{hasUsage && <th className="numeric-header" title="Used cost over requested cost, from one metrics-server sample">Used / requested</th>}<th>Confidence</th></tr></thead>
+          <tbody>
+            {visible.map(renderRow)}
+            {hidden.length > 0 && (
+              <tr className="allocation-more">
+                <td colSpan={4}><button type="button" className="link-button" onClick={() => setShowAll(true)}>Show {hidden.length} more</button></td>
+                <td className="cost-cell">{formatMoney(hiddenTotal, report.currency)}</td>
+                <td colSpan={hasUsage ? 3 : 2} />
+              </tr>
+            )}
+            {closing.map(renderRow)}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td><strong>Total billed</strong></td>
+              <td colSpan={3} />
+              <td className="cost-cell">{formatMoney(monthly(provisioned), report.currency)}</td>
+              <td className="numeric-cell">100%</td>
+              <td colSpan={hasUsage ? 2 : 1} />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {unpriced > 0 && (
+        <div className="panel-footnote">
+          <AlertCircle size={14} /> {unpriced} workload{unpriced === 1 ? " has" : "s have"} no resource requests. What they consume is counted as idle until requests are set.
         </div>
+      )}
+    </>
+  );
+}
+
+const trendWindows = historyWindows;
+
+const trendSegments = [
+  { key: "allocated", label: "Allocated", color: "#2a78d6" },
+  { key: "idle", label: "Idle", color: "#eb6834" },
+  { key: "shared", label: "Shared", color: "#4a3aa7" },
+] as const;
+
+function SpendOverTime({ clusterId, currency, capturedAt, onShowChanges }: { clusterId: string; currency: string; capturedAt: string; onShowChanges: () => void }) {
+  const [windowIndex, setWindowIndex] = useState<number>(defaultHistoryWindow);
+  const [focused, setFocused] = useState<number | null>(null);
+  const selected = trendWindows[windowIndex];
+  // capturedAt changes on every report, and every report writes a capture.
+  const { trend, error } = useCostTrend(clusterId, selected.days, selected.bucket, capturedAt);
+
+  const series = trend?.series;
+  const points = series?.points ?? [];
+  const columns = points.map((point) => {
+    const allocated = Object.values(point.byNamespace ?? {}).reduce((total, spend) => total + spend, 0);
+    return { point, values: { allocated, idle: point.idleUSD, shared: point.sharedUSD } as Record<(typeof trendSegments)[number]["key"], number> };
+  });
+  const highest = columns.reduce((maximum, column) => Math.max(maximum, column.point.provisionedUSD), 0);
+  const coverage = series && series.windowHours > 0 ? Math.round((series.coveredHours / series.windowHours) * 100) : 0;
+  const bucketLabel = (point: CostSeries["points"][number]) => new Date(point.start).toLocaleString(undefined, selected.bucket === "day" ? { month: "short", day: "numeric" } : { hour: "2-digit", minute: "2-digit" });
+  const active = focused !== null ? columns[focused] : null;
+
+  return (
+    <section className="cluster-panel">
+      <div className="cluster-panel-heading">
+        <h2>Spend over time</h2>
+        <Segmented label="History range" value={windowIndex} onChange={setWindowIndex} options={trendWindows.map((option, index) => ({ value: index, label: option.label, title: `Last ${option.previous.replace("previous ", "")}` }))} />
       </div>
 
-      <section className="cluster-panel">
-        <PanelTitle title="Recommendations" />
-        {recommendations.length === 0
-          ? <div className="panel-footnote"><Lightbulb size={14} /> Nothing to act on in this snapshot.</div>
-          : <div className="attention-list">
-            {recommendations.map((recommendation) => (
-              <RecommendationRow key={recommendation.id} recommendation={recommendation} timeWindow={timeWindow} currency={report.currency} />
-            ))}
-          </div>}
-        <div className="panel-footnote">
-          <Lightbulb size={14} /> Savings are projections of the current rate, not measured spend. Applying a change and re-running the report is the only way to confirm one.
-        </div>
-      </section>
+      {error && <div className="panel-footnote"><AlertCircle size={14} /> {error}</div>}
+      {!error && !series && <div className="panel-footnote"><LoaderCircle className="spin" size={14} /> Reading recorded captures...</div>}
+      {series && (
+        <>
+          <div className="trend-summary">
+            <div><span>Recorded billed spend</span><strong>{formatMoney(series.totalProvisionedUSD, currency)}</strong></div>
+            <div><span>Average billed rate</span><strong>{series.coveredHours > 0 ? `${formatMoney((series.totalProvisionedUSD / series.coveredHours) * hoursPerMonth, currency)}/mo` : "-"}</strong><RateChange current={series} previous={trend!.previous} label={selected.previous} />{(trend!.drivers ?? []).length > 0 && <button type="button" className="link-button" onClick={onShowChanges}>What changed?</button>}</div>
+            <div><span>Window captured</span><strong>{coverage}%</strong><small>{series.coveredHours.toFixed(1)} of {series.windowHours.toFixed(0)} hours</small></div>
+          </div>
 
-      <AssumptionsPanel report={report} />
+          {highest === 0
+            ? <div className="panel-footnote"><AlertCircle size={14} /> Nothing recorded in this window yet. A capture is written every time the cost report runs.</div>
+            : <>
+              <div className="bill-readout" aria-live="polite">
+                {active
+                  ? active.point.coveredHours === 0
+                    ? <>{bucketLabel(active.point)} · no capture</>
+                    : <>{bucketLabel(active.point)} · <strong>{formatMoney(active.point.provisionedUSD, currency)}</strong> billed{trendSegments.map((segment) => <span key={segment.key} className="trend-readout-part"><span className="bill-swatch" style={{ background: segment.color }} />{segment.label} {formatMoney(active.values[segment.key], currency)}</span>)}{active.point.bucketHours > 0 && active.point.coveredHours / active.point.bucketHours < 0.9 && <> · {Math.round((active.point.coveredHours / active.point.bucketHours) * 100)}% captured</>}</>
+                  : <>Hover a {selected.bucket} to see its split</>}
+              </div>
+              <div className="trend-chart" role="img" aria-label={`Billed spend per ${selected.bucket}, split into allocated, idle and shared`}>
+                {columns.map((column, index) => (
+                  <div
+                    key={String(column.point.start)}
+                    className={`trend-column ${focused !== null && focused !== index ? "dimmed" : ""}`}
+                    onMouseEnter={() => setFocused(index)}
+                    onMouseLeave={() => setFocused(null)}
+                  >
+                    {column.point.coveredHours === 0
+                      ? <span className="trend-gap" />
+                      : <div className="trend-stack" style={{ height: `${(column.point.provisionedUSD / highest) * 100}%` }}>
+                        {[...trendSegments].reverse().filter((segment) => column.values[segment.key] > 0).map((segment) => (
+                          <span key={segment.key} style={{ flexGrow: column.values[segment.key], background: segment.color }} />
+                        ))}
+                      </div>}
+                  </div>
+                ))}
+              </div>
+              <div className="trend-axis">
+                {columns.map((column, index) => (
+                  <span key={String(column.point.start)}>{index % Math.max(1, Math.ceil(columns.length / 8)) === 0 ? bucketLabel(column.point) : ""}</span>
+                ))}
+              </div>
+              <div className="bill-legend">
+                {trendSegments.map((segment) => (
+                  <div key={segment.key} className="bill-legend-item">
+                    <span className="bill-swatch" style={{ background: segment.color }} />
+                    <span>{segment.label}</span>
+                    <strong>{formatMoney(columns.reduce((total, column) => total + column.values[segment.key], 0), currency)}</strong>
+                  </div>
+                ))}
+              </div>
+              <TopNamespaces totals={series.totalByNamespace ?? {}} currency={currency} />
+            </>}
+          <div className="panel-footnote">
+            <Clock size={14} /> Spend is measured from captures taken while the app runs; hatched {selected.bucket}s had none and are left empty rather than estimated. The change compares average rates, so different coverage does not distort it.
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function RateChange({ current, previous, label }: { current: CostSeries; previous: CostTrend["previous"]; label: string }) {
+  if (current.coveredHours <= 0 || previous.coveredHours < 1) {
+    return <small>No captures in the {label}</small>;
+  }
+  const now = current.totalProvisionedUSD / current.coveredHours;
+  const before = previous.provisionedUSD / previous.coveredHours;
+  if (before <= 0) return <small>No billed spend in the {label}</small>;
+  const change = ((now - before) / before) * 100;
+  if (Math.abs(change) < 0.5) return <small>Unchanged vs the {label}</small>;
+  return <small>{change > 0 ? "▲" : "▼"} {Math.abs(change).toFixed(1)}% vs the {label}</small>;
+}
+
+function TopNamespaces({ totals, currency }: { totals: Record<string, number>; currency: string }) {
+  const entries = Object.entries(totals).filter(([, spend]) => spend > 0).sort((left, right) => right[1] - left[1]);
+  if (entries.length === 0) return null;
+  const shown = entries.slice(0, 5);
+  const rest = entries.slice(5).reduce((total, [, spend]) => total + spend, 0);
+  const highest = shown[0][1];
+  return (
+    <div className="trend-namespaces">
+      <h3>Top namespaces in this window</h3>
+      <div className="namespace-bars">
+        {shown.map(([name, spend]) => (
+          <div className="namespace-bar" key={name}>
+            <div><span className="namespace-name">{name}</span><strong>{formatMoney(spend, currency)}</strong></div>
+            <div className="capacity-track"><span style={{ width: `${Math.round((spend / highest) * 100)}%` }} /></div>
+          </div>
+        ))}
+        {rest > 0 && <div className="panel-footnote standalone">{entries.length - shown.length} more namespace{entries.length - shown.length === 1 ? "" : "s"} · {formatMoney(rest, currency)}</div>}
+      </div>
     </div>
   );
 }
@@ -314,8 +519,11 @@ function AssumptionsPanel({ report }: { report: CostReport }) {
   const warnings = report.warnings ?? [];
 
   return (
-    <section className="cluster-panel">
-      <PanelTitle title="Assumptions and gaps" />
+    <details className="cluster-panel assumptions-panel" open={warnings.length > 0}>
+      <summary className="cluster-panel-heading">
+        <h2>Assumptions and gaps</h2>
+        <small>{assumptions.length} assumption{assumptions.length === 1 ? "" : "s"} · {warnings.length} warning{warnings.length === 1 ? "" : "s"}</small>
+      </summary>
       {assumptions.map((assumption) => (
         <div className="panel-footnote" key={`${assumption.key}-${assumption.detail}`}><CircleDollarSign size={14} /> {assumption.detail}</div>
       ))}
@@ -325,23 +533,23 @@ function AssumptionsPanel({ report }: { report: CostReport }) {
       <div className="panel-footnote">
         <AlertCircle size={14} /> Figures are estimates from published list prices. Data transfer, load balancers and NAT gateways are not priced, and discounts are not applied.
       </div>
-    </section>
+    </details>
   );
 }
 
-function CostMetric({ label, projection, timeWindow, currency, detail, tone = "neutral" }: { label: string; projection: CostProjection; timeWindow: CostWindow; currency: string; detail?: string; tone?: "neutral" | "good" | "warning" }) {
+function CostMetric({ label, projection, currency, detail, tone = "neutral" }: { label: string; projection: CostProjection; currency: string; detail?: string; tone?: "neutral" | "good" | "warning" }) {
   return (
     <div className={`cluster-metric ${tone}`}>
       <span>{label}</span>
-      <strong>{formatMoney(pick(projection, timeWindow), currency)}</strong>
+      <strong title={`${formatMoney(projection.hourly, currency)} per hour · ${formatMoney(projection.daily, currency)} per day`}>{formatMoney(monthly(projection), currency)}<span className="rate-unit">/mo</span></strong>
       {detail && <small>{detail}</small>}
     </div>
   );
 }
 
-function CostBars({ buckets, timeWindow, currency }: { buckets: Record<string, CostProjection>; timeWindow: CostWindow; currency: string }) {
+function CostBars({ buckets, currency }: { buckets: Record<string, CostProjection>; currency: string }) {
   const entries = Object.entries(buckets)
-    .map(([name, projection]) => ({ name, value: pick(projection, timeWindow) }))
+    .map(([name, projection]) => ({ name, value: monthly(projection) }))
     .filter((entry) => entry.value > 0)
     .sort((left, right) => right.value - left.value)
     .slice(0, 8);
@@ -370,87 +578,41 @@ function PanelTitle({ title }: { title: string }) {
   return <div className="cluster-panel-heading"><h2>{title}</h2></div>;
 }
 
-function RecommendationRow({ recommendation, timeWindow, currency }: { recommendation: CostRecommendation; timeWindow: CostWindow; currency: string }) {
-  const savings = recommendation.savings?.[timeWindow] ?? 0;
-  return (
-    <div className="cost-line">
-      <div>
-        <span className="cost-line-icon">{severityIcon(recommendation.severity)}</span>
-        <span>
-          {recommendation.title}
-          <small className="system-namespace-label">{recommendation.rationale}</small>
-          <small className="system-namespace-label">{recommendation.action}</small>
-        </span>
-        <strong>{savings > 0 ? formatMoney(savings, currency) : "No saving claimed"}</strong>
-      </div>
-    </div>
-  );
+const componentLabels: Record<string, string> = {
+  cpu: "CPU",
+  memory: "Memory",
+  storage: "Storage",
+  gpu: "GPU",
+  flat: "Flat fees",
+};
+
+function nodeGroupBuckets(report: CostReport): Record<string, CostProjection> {
+  const buckets: Record<string, CostProjection> = { ...dimension(report, "provisioned", "parent") };
+  const grouped = Object.values(buckets).reduce((total, projection) => total + projection.hourly, 0);
+  const nodes = dimension(report, "provisioned", "subjectKind").node;
+  if (nodes && nodes.hourly - grouped > 1e-9) {
+    buckets["Nodes without a node group"] = projectHourly(nodes.hourly - grouped, nodes);
+  }
+  return buckets;
 }
 
-function severityIcon(severity: string) {
-  if (severity === "blocker") return <AlertCircle size={15} />;
-  if (severity === "high") return <ServerCog size={15} />;
-  if (severity === "medium") return <HardDrive size={15} />;
-  return <Server size={15} />;
-}
-
-function projectionOfSavings(recommendations: CostRecommendation[]): CostProjection {
-  return recommendations.reduce((total, recommendation) => ({
-    hourly: total.hourly + (recommendation.savings?.hourly ?? 0),
-    daily: total.daily + (recommendation.savings?.daily ?? 0),
-    monthly: total.monthly + (recommendation.savings?.monthly ?? 0),
-    yearly: total.yearly + (recommendation.savings?.yearly ?? 0),
-  }), { ...emptyProjection });
-}
-
-function componentRows(report: CostReport) {
-  const buckets = dimension(report, "component");
-  const icons: Record<string, React.ReactNode> = {
-    cpu: <Cpu size={15} />,
-    memory: <Layers3 size={15} />,
-    storage: <HardDrive size={15} />,
-    gpu: <ServerCog size={15} />,
-    flat: <Server size={15} />,
-  };
-  const labels: Record<string, string> = {
-    cpu: "CPU",
-    memory: "Memory",
-    storage: "Storage",
-    gpu: "GPU",
-    flat: "Flat fees",
-  };
-
-  const rows = Object.entries(buckets).map(([key, projection]) => ({ key, projection, label: labels[key] ?? key, icon: icons[key] ?? <Server size={15} /> }));
-  const highest = rows.reduce((maximum, row) => Math.max(maximum, row.projection.hourly), 0);
-  return rows
-    .filter((row) => row.projection.hourly > 0)
-    .sort((left, right) => right.projection.hourly - left.projection.hourly)
-    .map((row) => ({ ...row, share: highest > 0 ? Math.round((row.projection.hourly / highest) * 100) : 0 }));
-}
-
-function topItems(report: CostReport): CostLineItem[] {
-  return [...(report.items ?? [])]
-    .sort((left, right) => right.hourlyUSD - left.hourlyUSD)
-    .slice(0, 12);
+/** Scales an hourly figure with the same window ratios as a reference projection. */
+function projectHourly(hourly: number, reference: CostProjection): CostProjection {
+  if (reference.hourly <= 0) return { ...emptyProjection };
+  const ratio = hourly / reference.hourly;
+  return { hourly, daily: reference.daily * ratio, monthly: reference.monthly * ratio, yearly: reference.yearly * ratio };
 }
 
 function totalFor(report: CostReport, basis: string): CostProjection {
   return report.totals?.[basis] ?? emptyProjection;
 }
 
-function dimension(report: CostReport, name: string): Record<string, CostProjection> {
-  return (report.byDimension?.[name] as Record<string, CostProjection>) ?? {};
+function dimension(report: CostReport, basis: string, name: string): Record<string, CostProjection> {
+  return (report.byDimension?.[basis]?.[name] as Record<string, CostProjection>) ?? {};
 }
 
-function pick(projection: CostProjection, timeWindow: CostWindow) {
-  return projection?.[timeWindow] ?? 0;
+/** The explorer shows every rate per month, the unit budgets and bills use. */
+function monthly(projection: CostProjection | undefined) {
+  return projection?.monthly ?? 0;
 }
 
-function formatMoney(value: number, currency = "USD") {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: value < 1 ? 4 : 2,
-    maximumFractionDigits: 4,
-  }).format(value);
-}

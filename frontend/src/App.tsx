@@ -1,4 +1,4 @@
-import { estimateManifest, getClusterSnapshot, getWorkloadYAML, ClusterSnapshot, ManifestResult } from "./backend";
+import { estimateManifest, getWorkloadYAML, simulateManifest, ClusterSnapshot, ManifestResult, SimulationResult } from "./backend";
 import {
   AlertCircle,
   Activity,
@@ -21,7 +21,6 @@ import {
   LoaderCircle,
   Network,
   PlugZap,
-  RefreshCw,
   RotateCcw,
   Search,
   Server,
@@ -31,10 +30,14 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
 import { ClusterProvider, useCluster } from "./ClusterContext";
+import { ClusterSnapshotProvider, useClusterSnapshot } from "./ClusterSnapshotContext";
+import { DataFreshness } from "./DataFreshness";
 import { ConnectionModal } from "./ConnectionModal";
 import { CostSection } from "./CostSection";
+import { CostReportProvider, useCostReport } from "./CostReportContext";
+import { ClusterImpact } from "./ClusterImpact";
 import { EstimationHistoryProvider, useEstimationHistory, SavedEstimation } from "./EstimationHistory";
 import { EstimationRegistry } from "./HistoryPanel";
 
@@ -78,7 +81,7 @@ const providerCatalog: Record<Provider, Record<string, string[]>> = {
   },
 };
 
-type ResultTab = "overview" | "resources" | "source";
+type ResultTab = "impact" | "overview" | "resources" | "source";
 type AppSection = "estimate" | "cluster" | "cost";
 type ClusterView = "overview" | "workloads" | "resources" | "namespaces" | "nodes" | "provider";
 type WorkloadFilter = "all" | "incomplete" | "incomplete-application" | "incomplete-system";
@@ -110,6 +113,8 @@ function AppContent() {
   const [region, setRegion] = useState("us-east-1");
   const [instanceType, setInstanceType] = useState("m6i.large");
   const [result, setResult] = useState<ManifestResult | null>(null);
+  const [simulation, setSimulation] = useState<SimulationResult | null>(null);
+  const costReport = useCostReport();
   const [activeTab, setActiveTab] = useState<ResultTab>("overview");
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -118,13 +123,23 @@ function AppContent() {
     ? { label: "EKS", accessibleLabel: "Amazon EKS", className: "aws", icon: <Cloud size={15} /> }
     : { label: "LOCAL", accessibleLabel: "Local or on-premises Kubernetes", className: "local", icon: <Server size={15} /> };
 
-  // Auto-switch to cluster mode when cluster is connected
+  // A connected cluster can price manifests only if a price list covers it;
+  // until its snapshot says otherwise, assume it can.
+  const { snapshot: clusterSnapshot } = useClusterSnapshot();
+  const clusterPlatform = clusterSnapshot?.platform;
+  const clusterPriceable = isConnected() && clusterPlatform?.supported !== false;
+
+  // Auto-switch to cluster mode when a priceable cluster is connected, and
+  // back to catalog pricing when it turns out it cannot be priced.
   useEffect(() => {
-    if (isConnected()) {
+    if (clusterPriceable) {
       setEstimationMode("cluster");
       setShowConnectHint(false);
+    } else if (isConnected()) {
+      setEstimationMode("manual");
+      setShowConnectHint(false);
     }
-  }, [isConnected()]);
+  }, [clusterPriceable, isConnected()]);
 
   function acceptFile(file?: File) {
     if (!file) return;
@@ -165,6 +180,7 @@ function AppContent() {
     setFileName("");
     setManifest("");
     setResult(null);
+    setSimulation(null);
     setError("");
     setActiveTab("overview");
   }
@@ -176,23 +192,32 @@ function AppContent() {
     }
 
     if (estimationMode === "cluster" && !isConnected()) {
-      setError("No cluster connected. Please connect a cluster or switch to manual pricing mode.");
+      setError("No cluster connected. Connect a cluster or switch to Catalog pricing.");
       return;
     }
 
     setIsLoading(true);
     setError("");
     try {
-      const estimate = await estimateManifest({
-        documents: [{ name: fileName || "untitled.yaml", content: manifest }],
-        provider: estimationMode === "manual" ? provider : undefined,
-        region: estimationMode === "manual" ? region : undefined,
-        instanceType: estimationMode === "manual" ? instanceType : undefined,
-        useClusterData: estimationMode === "cluster" && isConnected() ? true : false,
-        clusterInfo: estimationMode === "cluster" && isConnected() && clusterConnection ? clusterConnection : undefined,
-      });
+      const document = { name: fileName || "untitled.yaml", content: manifest };
+      let estimate: ManifestResult;
+      if (estimationMode === "cluster") {
+        // The simulation runs against the shared cost report; load it first
+        // if the Cost section has not done so yet.
+        const current = costReport.report ?? await costReport.refresh();
+        if (!current) {
+          throw new Error(costReport.error || "The cluster's cost report could not be loaded.");
+        }
+        const simulated = await simulateManifest(current.clusterId, document);
+        setSimulation(simulated);
+        estimate = simulated.estimate as ManifestResult;
+        setActiveTab("impact");
+      } else {
+        estimate = await estimateManifest({ documents: [document], provider, region, instanceType });
+        setSimulation(null);
+        setActiveTab("overview");
+      }
       setResult(estimate);
-      setActiveTab("overview");
 
       // Save to history
       saveEstimation({
@@ -209,6 +234,7 @@ function AppContent() {
       });
     } catch (reason) {
       setResult(null);
+      setSimulation(null);
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setIsLoading(false);
@@ -219,6 +245,8 @@ function AppContent() {
     setFileName(estimation.name);
     setManifest(estimation.manifest);
     setResult(estimation.fullResult);
+    // A saved simulation describes the cluster as it was; estimate again for a current one.
+    setSimulation(null);
     setActiveTab("overview");
 
     if (estimation.estimationMode === "manual") {
@@ -294,7 +322,7 @@ function AppContent() {
           <button type="button" className={estimateView === "registry" ? "active" : ""} onClick={() => setEstimateView("registry")}><Clock size={17} /><span>Saved estimates</span></button>
         </aside>}
         <div className={`app-main ${activeSection === "cluster" || activeSection === "cost" ? "cluster-app-main" : ""}`}>
-      {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "cost" ? <CostSection onConnectClick={() => setIsModalOpen(true)} /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace ${result ? "has-result" : "manifest-stage"}`}>
+      {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "cost" ? <CostSection onConnectClick={() => setIsModalOpen(true)} onTestWorkload={() => { setActiveSection("estimate"); setEstimateView("estimator"); setEstimationMode("cluster"); setResult(null); setSimulation(null); }} /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace ${result ? "has-result" : "manifest-stage"}`}>
         <aside className="input-pane">
           <div className="pane-heading">
             <div><span className="step-label">01 / INPUT</span><h1>Manifest</h1></div>
@@ -357,34 +385,36 @@ function AppContent() {
                 onClick={() => {
                   setEstimationMode("manual");
                   setResult(null);
+                  setSimulation(null);
                 }}
-                title="Use manual pricing assumptions"
+                title="Price the manifest with a provider, region and machine type you choose"
               >
                 <Cloud size={16} />
                 <span>
-                  <strong>Manual Pricing</strong>
-                  <small>Set custom provider & instance</small>
+                  <strong>Catalog pricing</strong>
+                  <small>Choose provider & instance</small>
                 </span>
               </button>
               <button
                 type="button"
-                className={`mode-button ${estimationMode === "cluster" ? "active" : ""} ${!isConnected() ? "disabled" : ""}`}
+                className={`mode-button ${estimationMode === "cluster" ? "active" : ""} ${!clusterPriceable ? "disabled" : ""}`}
                 onClick={() => {
-                  if (isConnected()) {
+                  if (clusterPriceable) {
                     setEstimationMode("cluster");
                     setResult(null);
+                    setSimulation(null);
                   }
                 }}
-                disabled={!isConnected()}
-                title={isConnected() ? "Use connected cluster data for better accuracy" : "Connect a cluster first"}
+                disabled={!clusterPriceable}
+                title={!isConnected() ? "Connect a cluster first" : clusterPriceable ? "Price with the cluster's own rates and simulate deploying it there" : `This cluster cannot be priced: ${clusterPlatform?.reason ?? ""}`}
               >
                 <Network size={16} />
                 <span>
-                  <strong>From Cluster</strong>
-                  <small>{isConnected() ? clusterConnection?.name : "Connect a cluster"}</small>
+                  <strong>Connected cluster</strong>
+                  <small>{!isConnected() ? "Connect a cluster" : clusterPriceable ? clusterConnection?.name : "No price list for this cluster"}</small>
                 </span>
                 <span className={`value-badge ${isConnected() ? "connected" : "disconnected"}`}>
-                  {isConnected() ? "More accurate" : "Connect to activate"}
+                  {isConnected() ? "Shows cluster impact" : "Connect to activate"}
                 </span>
               </button>
             </div>
@@ -396,7 +426,7 @@ function AppContent() {
                 <Lightbulb size={16} />
                 <div>
                   <strong>Pro tip: Connect a cluster</strong>
-                  <p>Get more accurate cost estimates by connecting your Kubernetes cluster. We'll automatically use live workload data.</p>
+                  <p>Connect a Kubernetes cluster to price manifests at its own rates and see what deploying them does to its bill, idle capacity and budget.</p>
                 </div>
                 <button
                   type="button"
@@ -487,16 +517,18 @@ function AppContent() {
           ) : (
             <div className="result-content">
               <nav className="tabs" aria-label="Estimate views">
-                {(["overview", "resources", "source"] as ResultTab[]).map((tab) => (
+                {((simulation ? ["impact", "overview", "resources", "source"] : ["overview", "resources", "source"]) as ResultTab[]).map((tab) => (
                   <button key={tab} type="button" className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)}>
+                    {tab === "impact" && <Network size={15} />}
                     {tab === "overview" && <Gauge size={15} />}
                     {tab === "resources" && <Layers3 size={15} />}
                     {tab === "source" && <Code2 size={15} />}
-                    {tab[0].toUpperCase() + tab.slice(1)}
+                    {tab === "impact" ? "Cluster impact" : tab[0].toUpperCase() + tab.slice(1)}
                   </button>
                 ))}
               </nav>
 
+              {activeTab === "impact" && simulation && <ClusterImpact simulation={simulation} isRefreshing={costReport.isLoading || isLoading} onRefresh={async () => { if (await costReport.refresh()) await runEstimate(); }} />}
               {activeTab === "overview" && <Overview result={result} />}
               {activeTab === "resources" && <Resources result={result} />}
               {activeTab === "source" && <pre className="source-preview"><code>{manifest}</code></pre>}
@@ -530,59 +562,14 @@ function ClusterLockedState({ onConnectClick }: { onConnectClick: () => void }) 
 }
 
 function ClusterConnection() {
-  const { isConnected, clusterConnection } = useCluster();
+  const { isConnected } = useCluster();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeView, setActiveView] = useState<ClusterView>("overview");
   const [workloadFilter, setWorkloadFilter] = useState<WorkloadFilter>("all");
-  const [snapshot, setSnapshot] = useState<ClusterSnapshot | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [snapshotError, setSnapshotError] = useState("");
-  const manualRefreshEnabled = clusterConnection?.refreshIntervalMs === null;
-
-  const refreshSnapshot = useCallback(async () => {
-    if (!clusterConnection?.context) {
-      setSnapshotError("The connected cluster does not have a kubeconfig context.");
-      return;
-    }
-    setIsRefreshing(true);
-    setSnapshotError("");
-    try {
-      const nextSnapshot = await getClusterSnapshot(
-        clusterConnection.kubeconfigPath ?? "",
-        clusterConnection.context,
-        clusterConnection.namespace,
-        clusterConnection.provider === "aws-eks" ? {
-          name: "aws-eks",
-          clusterName: clusterConnection.clusterName ?? clusterConnection.name,
-          region: clusterConnection.region ?? "",
-          profile: clusterConnection.profile ?? "default",
-          roleArn: clusterConnection.roleArn ?? "",
-        } : undefined,
-      );
-      setSnapshot(nextSnapshot);
-    } catch (reason) {
-      setSnapshotError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [clusterConnection?.context, clusterConnection?.kubeconfigPath, clusterConnection?.namespace, clusterConnection?.provider, clusterConnection?.clusterName, clusterConnection?.name, clusterConnection?.region, clusterConnection?.profile, clusterConnection?.roleArn]);
-
-  useEffect(() => {
-    if (isConnected()) void refreshSnapshot();
-  }, [isConnected, refreshSnapshot]);
-
-  useEffect(() => {
-    const intervalMs = clusterConnection?.refreshIntervalMs;
-    if (!intervalMs) return;
-
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState === "visible" && !isRefreshing) {
-        void refreshSnapshot();
-      }
-    }, intervalMs);
-
-    return () => window.clearInterval(intervalId);
-  }, [clusterConnection?.refreshIntervalMs, isRefreshing, refreshSnapshot]);
+  const { snapshot, isRefreshing, error: snapshotError } = useClusterSnapshot();
+  // Pod usage only feeds the Cost section, which explains a missing
+  // metrics-server where it matters (efficiency, rightsizing).
+  const clusterWarnings = (snapshot?.warnings ?? []).filter((warning) => warning.resource !== "pod metrics");
 
   useEffect(() => {
     if (!snapshot?.provider && activeView === "provider") {
@@ -612,12 +599,12 @@ function ClusterConnection() {
         <div className="cluster-sidebar-spacer" />
       </aside>
       <section className="cluster-management-view">
-        <ClusterScreenHeader view={activeView} snapshot={snapshot} isRefreshing={isRefreshing} onRefresh={refreshSnapshot} manualRefreshEnabled={manualRefreshEnabled} />
+        <ClusterScreenHeader view={activeView} snapshot={snapshot} isRefreshing={isRefreshing} failed={Boolean(snapshotError && snapshot)} />
         {snapshotError && <div className="error-message"><AlertCircle size={16} /><span>{snapshotError}</span></div>}
         {!snapshot && isRefreshing && <div className="cluster-screen-content"><section className="cluster-panel"><div className="panel-footnote"><LoaderCircle className="spin" size={15} /> Collecting live cluster resources...</div></section></div>}
-        {snapshot && snapshot.warnings.length > 0 && <div className="cluster-screen-content"><div className="error-message"><AlertCircle size={16} /><span>{snapshot.warnings.map((warning) => warning.message).join(" ")}</span></div></div>}
+        {clusterWarnings.length > 0 && <div className="cluster-screen-content"><div className="error-message"><AlertCircle size={16} /><span>{clusterWarnings.map((warning) => warning.message).join(" ")}</span></div></div>}
         {snapshot && activeView === "overview" && <ClusterOverview snapshot={snapshot} onNavigate={setActiveView} onShowWorkloads={(filter) => { setWorkloadFilter(filter); setActiveView("workloads"); }} />}
-        {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} filter={workloadFilter} onFilterChange={setWorkloadFilter} onRefresh={refreshSnapshot} isRefreshing={isRefreshing} manualRefreshEnabled={manualRefreshEnabled} />}
+        {snapshot && activeView === "workloads" && <ClusterWorkloads snapshot={snapshot} filter={workloadFilter} onFilterChange={setWorkloadFilter} />}
         {snapshot && activeView === "resources" && <ClusterResources snapshot={snapshot} />}
         {snapshot && activeView === "namespaces" && <ClusterNamespaces snapshot={snapshot} />}
         {snapshot && activeView === "nodes" && <ClusterNodes snapshot={snapshot} />}
@@ -641,13 +628,12 @@ const clusterViewTitles: Record<ClusterView, { title: string; description: strin
   provider: { title: "Provider", description: "Review AWS and EKS infrastructure metadata for this cluster." },
 };
 
-function ClusterScreenHeader({ view, snapshot, isRefreshing, onRefresh, manualRefreshEnabled }: { view: ClusterView; snapshot: ClusterSnapshot | null; isRefreshing: boolean; onRefresh: () => void; manualRefreshEnabled: boolean }) {
+function ClusterScreenHeader({ view, snapshot, isRefreshing, failed }: { view: ClusterView; snapshot: ClusterSnapshot | null; isRefreshing: boolean; failed: boolean }) {
   const details = clusterViewTitles[view];
   return <div className="management-header">
     <div><span className="step-label">CLUSTER / {view.toUpperCase()}</span><h1>{details.title}</h1><p>{details.description}</p></div>
     <div className="management-actions">
-      {manualRefreshEnabled && <button type="button" className="refresh-button" onClick={onRefresh} disabled={isRefreshing} title="Refresh cluster snapshot" aria-label="Refresh cluster snapshot"><RefreshCw className={isRefreshing ? "spin" : ""} size={15} /></button>}
-      <span className="cluster-data-badge"><span /> {snapshot ? `Live / ${new Date(snapshot.collectedAt).toLocaleTimeString()}` : "Waiting for data"}</span>
+      <DataFreshness updatedAt={snapshot?.collectedAt ?? null} isRefreshing={isRefreshing} failed={failed} />
     </div>
   </div>;
 }
@@ -763,7 +749,7 @@ function ClusterProviderView({ snapshot }: { snapshot: ClusterSnapshot }) {
   </div>;
 }
 
-function ClusterWorkloads({ snapshot, filter, onFilterChange, onRefresh, isRefreshing, manualRefreshEnabled }: { snapshot: ClusterSnapshot; filter: WorkloadFilter; onFilterChange: (filter: WorkloadFilter) => void; onRefresh: () => void; isRefreshing: boolean; manualRefreshEnabled: boolean }) {
+function ClusterWorkloads({ snapshot, filter, onFilterChange }: { snapshot: ClusterSnapshot; filter: WorkloadFilter; onFilterChange: (filter: WorkloadFilter) => void }) {
   const { clusterConnection } = useCluster();
   const [searchQuery, setSearchQuery] = useState("");
   const [namespaceFilter, setNamespaceFilter] = useState("all");
@@ -1674,9 +1660,13 @@ function Resources({ result }: { result: ManifestResult }) {
 function App() {
   return (
     <ClusterProvider>
-      <EstimationHistoryProvider>
-        <AppContent />
-      </EstimationHistoryProvider>
+      <ClusterSnapshotProvider>
+        <CostReportProvider>
+          <EstimationHistoryProvider>
+            <AppContent />
+          </EstimationHistoryProvider>
+        </CostReportProvider>
+      </ClusterSnapshotProvider>
     </ClusterProvider>
   );
 }

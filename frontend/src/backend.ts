@@ -2,14 +2,21 @@ import { EstimateManifest } from "../wailsjs/go/wails/ManifestAdapter";
 import {
   GetClusterSnapshot,
 	GetWorkloadYAML,
+  DismissRecommendation,
+  GetCostForecast,
   GetCostReport,
   GetCostTrend,
+  MarkRecommendationApplied,
+  RestoreRecommendation,
+  ReopenRecommendation,
+  SetCostBudget,
+  SimulateManifest,
   ListKubeconfigContexts,
   ListEKSClusters,
   PrepareEKSConnection,
   TestConnection,
 } from "../wailsjs/go/wails/ClusterAdapter";
-import { cluster, costmodel, costseries, optimize, wails } from "../wailsjs/go/models";
+import { cluster, costmodel, costseries, optimize, wails, whatif } from "../wailsjs/go/models";
 
 export interface ManifestRequest {
   documents: Array<{
@@ -19,12 +26,6 @@ export interface ManifestRequest {
   provider?: string;
   region?: string;
   instanceType?: string;
-  useClusterData?: boolean;
-  clusterInfo?: {
-    name: string;
-    context?: string;
-    namespace: string;
-  };
 }
 
 export type ManifestResult = wails.ManifestResult;
@@ -33,10 +34,20 @@ export type ClusterConnectionResult = wails.ClusterConnectionResult;
 export type ClusterSnapshot = cluster.Snapshot;
 export type CostReport = costmodel.CostReport;
 export type CostLineItem = costmodel.LineItem;
+export type CostAllocationRow = costmodel.AllocationRow;
 export type CostProjection = costmodel.Projection;
 export type CostReportResult = wails.CostReportResult;
-export type CostRecommendation = optimize.Recommendation;
-export type CostTrend = costseries.Series;
+export type OptimizationResult = wails.OptimizationResult;
+export type SimulationResult = wails.SimulationResult;
+export type SimulationImpact = whatif.Result;
+export type OptimizationRecommendation = optimize.Recommendation;
+export type OptimizationItem = optimize.Item;
+export type AppliedRecommendation = wails.AppliedRecommendation;
+export type RecommendationEvent = wails.RecommendationEvent;
+export type CostTrend = wails.CostTrendResult;
+export type CostSeries = costseries.Series;
+export type CostDriver = costseries.Driver;
+export type CostForecast = wails.CostForecastResult;
 export type CostTrendPoint = costseries.Point;
 
 declare global {
@@ -153,6 +164,45 @@ export async function getCostTrend(clusterId: string, days: number, bucket: "hou
   }
 
   return GetCostTrend(new wails.CostTrendRequest({ clusterId, days, bucket }));
+}
+
+export async function getCostForecast(clusterId: string, runRateHourly: number): Promise<CostForecast> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return GetCostForecast(new wails.CostForecastRequest({ clusterId, runRateHourly }));
+}
+
+export async function setCostBudget(clusterId: string, monthlyUSD: number): Promise<void> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return SetCostBudget(new wails.CostBudgetRequest({ clusterId, monthlyUSD }));
+}
+
+function recommendationAction(call: (request: wails.RecommendationRequest) => Promise<wails.OptimizationResult>) {
+  return async (clusterId: string, id: string): Promise<OptimizationResult> => {
+    if (!window.go?.wails?.ClusterAdapter) {
+      throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+    }
+    return call(new wails.RecommendationRequest({ clusterId, id }));
+  };
+}
+
+export const dismissRecommendation = recommendationAction(DismissRecommendation);
+export const restoreRecommendation = recommendationAction(RestoreRecommendation);
+export const reopenRecommendation = recommendationAction(ReopenRecommendation);
+export const markRecommendationApplied = recommendationAction(MarkRecommendationApplied);
+
+/** Prices a manifest at a connected cluster's rates and simulates deploying it. */
+export async function simulateManifest(clusterId: string, document: { name: string; content: string }): Promise<SimulationResult> {
+  if (!window.go?.wails?.ClusterAdapter) {
+    throw new Error("The Wails desktop runtime is unavailable. Start the dashboard with `wails dev`.");
+  }
+
+  return SimulateManifest(new wails.SimulationRequest({ clusterId, document }));
 }
 
 export async function getWorkloadYAML(

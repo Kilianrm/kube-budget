@@ -46,7 +46,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
   const [contexts, setContexts] = useState<ClusterContext[]>([]);
   const [namespace, setNamespace] = useState("All namespaces");
   const [readOnly, setReadOnly] = useState(true);
-  const [refreshIntervalMs, setRefreshIntervalMs] = useState<number | null>(defaultRefreshIntervalMs);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState<number>(defaultRefreshIntervalMs);
   const [notice, setNotice] = useState("");
   const [noticeKind, setNoticeKind] = useState<"info" | "success" | "error">("info");
   const [completedSteps, setCompletedSteps] = useState(0);
@@ -346,11 +346,10 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
                 <span>Automatic refresh</span>
                 <div className="select-wrap">
                   <select
-                    value={displayedConnection.refreshIntervalMs ?? ""}
-                    onChange={(event) => updateConnection({ refreshIntervalMs: event.target.value ? Number(event.target.value) : null })}
+                    value={displayedConnection.refreshIntervalMs ?? defaultRefreshIntervalMs}
+                    onChange={(event) => updateConnection({ refreshIntervalMs: Number(event.target.value) })}
                     disabled={isDisconnecting}
                   >
-                    <option value="">Off (manual refresh only)</option>
                     <option value="10000">Every 10 seconds</option>
                     <option value="30000">Every 30 seconds</option>
                     <option value="60000">Every minute</option>
@@ -530,8 +529,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
               <label className="form-field full-width">
                 <span>Automatic refresh</span>
                 <div className="select-wrap">
-                  <select value={refreshIntervalMs ?? ""} onChange={(event) => setRefreshIntervalMs(event.target.value ? Number(event.target.value) : null)}>
-                    <option value="">Off (manual refresh only)</option>
+                  <select value={refreshIntervalMs} onChange={(event) => setRefreshIntervalMs(Number(event.target.value))}>
                     <option value="10000">Every 10 seconds</option>
                     <option value="30000">Every 30 seconds</option>
                     <option value="60000">Every minute</option>
