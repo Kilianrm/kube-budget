@@ -165,6 +165,7 @@ type Snapshot struct {
 	Namespaces    []NamespaceSummary `json:"namespaces"`
 	Warnings      []Warning          `json:"warnings"`
 	Provider      *ProviderMetadata  `json:"provider,omitempty"`
+	Platform      Platform           `json:"platform"`
 }
 
 type CollectedData struct {
