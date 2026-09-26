@@ -17,8 +17,12 @@ func newTestStore(t *testing.T) *Store {
 
 func sampleReport() costmodel.CostReport {
 	items := []costmodel.LineItem{
-		{Subject: costmodel.Subject{Kind: costmodel.SubjectNode, Name: "node-1", ParentID: "ng-1"}, Basis: costmodel.BasisProvisioned, HourlyUSD: 0.2, Confidence: costmodel.ConfidenceExact},
-		{Subject: costmodel.Subject{Kind: costmodel.SubjectWorkload, Name: "api", Namespace: "prod"}, Basis: costmodel.BasisRequested, HourlyUSD: 0.05, Confidence: costmodel.ConfidenceDerived},
+		{Subject: costmodel.Subject{Kind: costmodel.SubjectNode, Name: "node-1", ParentID: "ng-1"}, Basis: costmodel.BasisProvisioned, HourlyUSD: 0.2, Confidence: costmodel.ConfidenceExact,
+			Components: map[costmodel.Component]float64{costmodel.ComponentCPU: 0.1, costmodel.ComponentMemory: 0.1}},
+		{Subject: costmodel.Subject{Kind: costmodel.SubjectControlPlane, Name: "control plane"}, Basis: costmodel.BasisProvisioned, HourlyUSD: 0.1, Confidence: costmodel.ConfidenceExact,
+			Components: map[costmodel.Component]float64{costmodel.ComponentFlat: 0.1}},
+		{Subject: costmodel.Subject{Kind: costmodel.SubjectWorkload, Name: "api", Namespace: "prod"}, Basis: costmodel.BasisRequested, HourlyUSD: 0.05, Confidence: costmodel.ConfidenceDerived,
+			Components: map[costmodel.Component]float64{costmodel.ComponentCPU: 0.05}},
 		{Subject: costmodel.Subject{Kind: costmodel.SubjectWorkload, Name: "legacy", Namespace: "prod"}, Basis: costmodel.BasisRequested, Confidence: costmodel.ConfidenceUnknown},
 	}
 	return costmodel.NewReport(time.Unix(0, 0), costmodel.Scope{Provider: "aws", Region: "us-east-1", ClusterName: "demo"}, items, nil)
@@ -30,11 +34,12 @@ func TestFromReportKeepsHourlyRatesOnly(t *testing.T) {
 	if record.ClusterID != "aws/us-east-1/demo" {
 		t.Errorf("ClusterID = %q, want aws/us-east-1/demo", record.ClusterID)
 	}
-	if record.HourlyByBasis["provisioned"] != 0.2 || record.HourlyByBasis["requested"] != 0.05 {
+	if math.Abs(record.HourlyByBasis["provisioned"]-0.3) > 1e-9 || record.HourlyByBasis["requested"] != 0.05 {
 		t.Errorf("HourlyByBasis = %+v, want the two bases", record.HourlyByBasis)
 	}
-	if math.Abs(record.IdleHourly-0.15) > 1e-9 {
-		t.Errorf("IdleHourly = %v, want 0.15", record.IdleHourly)
+	// the control plane is recorded as shared, never as idle node capacity
+	if math.Abs(record.IdleHourly-0.15) > 1e-9 || record.SharedHourly != 0.1 {
+		t.Errorf("IdleHourly = %v, SharedHourly = %v, want 0.15 and 0.1", record.IdleHourly, record.SharedHourly)
 	}
 	if record.NodeCount != 1 || record.WorkloadCount != 2 || record.Unpriced != 1 {
 		t.Errorf("counts = %d nodes, %d workloads, %d unpriced", record.NodeCount, record.WorkloadCount, record.Unpriced)
@@ -150,5 +155,19 @@ func TestAppendTrimsToTheRecordLimit(t *testing.T) {
 	}
 	if !records[0].CapturedAt.Equal(base.Add(3 * time.Hour).UTC()) {
 		t.Errorf("oldest kept record = %v, want the fourth capture", records[0].CapturedAt)
+	}
+}
+
+func TestFromReportKeepsUngroupedNodesInTheNodeGroupRollup(t *testing.T) {
+	items := []costmodel.LineItem{
+		{Subject: costmodel.Subject{Kind: costmodel.SubjectNode, Name: "grouped", ParentID: "ng-1"}, Basis: costmodel.BasisProvisioned, HourlyUSD: 0.2, Confidence: costmodel.ConfidenceExact,
+			Components: map[costmodel.Component]float64{costmodel.ComponentCPU: 0.1, costmodel.ComponentMemory: 0.1}},
+		{Subject: costmodel.Subject{Kind: costmodel.SubjectNode, Name: "loose"}, Basis: costmodel.BasisProvisioned, HourlyUSD: 0.3, Confidence: costmodel.ConfidenceExact,
+			Components: map[costmodel.Component]float64{costmodel.ComponentCPU: 0.15, costmodel.ComponentMemory: 0.15}},
+	}
+	record := FromReport(costmodel.NewReport(time.Unix(0, 0), costmodel.Scope{}, items, nil), time.Unix(0, 0))
+
+	if record.HourlyByNodeGroup["ng-1"] != 0.2 || math.Abs(record.HourlyByNodeGroup[UngroupedNodes]-0.3) > 1e-9 {
+		t.Errorf("HourlyByNodeGroup = %+v, want ng-1 0.2 and ungrouped 0.3", record.HourlyByNodeGroup)
 	}
 }

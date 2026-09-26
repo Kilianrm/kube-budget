@@ -17,8 +17,10 @@ import (
 )
 
 // SchemaVersion guards stored records against model changes. Records written
-// by a different version are ignored rather than misread.
-const SchemaVersion = 1
+// by a different version are ignored rather than misread. Version 2 stores
+// idle as node capacity only and the control plane as shared; version 1 idle
+// included both and cannot be split back apart.
+const SchemaVersion = 2
 
 // defaultMaxRecords bounds the store so a long-running desktop app cannot grow
 // the file without limit.
@@ -33,6 +35,7 @@ type Record struct {
 	Currency          string             `json:"currency"`
 	HourlyByBasis     map[string]float64 `json:"hourlyByBasis"`
 	IdleHourly        float64            `json:"idleHourly"`
+	SharedHourly      float64            `json:"sharedHourly,omitempty"`
 	HourlyByNamespace map[string]float64 `json:"hourlyByNamespace,omitempty"`
 	HourlyByNodeGroup map[string]float64 `json:"hourlyByNodeGroup,omitempty"`
 	NodeCount         int                `json:"nodeCount"`
@@ -86,8 +89,9 @@ func FromReport(report costmodel.CostReport, capturedAt time.Time) Record {
 		Currency:          report.Currency,
 		HourlyByBasis:     make(map[string]float64, len(report.Totals)),
 		IdleHourly:        report.Idle.Hourly,
-		HourlyByNamespace: hourlyDimension(report, costmodel.DimensionNamespace),
-		HourlyByNodeGroup: hourlyDimension(report, costmodel.DimensionParent),
+		SharedHourly:      report.Shared.Hourly,
+		HourlyByNamespace: hourlyByNamespace(report),
+		HourlyByNodeGroup: hourlyByNodeGroup(report),
 	}
 	for basis, projection := range report.Totals {
 		record.HourlyByBasis[string(basis)] = projection.Hourly
@@ -251,14 +255,50 @@ func (store *Store) trimLocked() error {
 	return os.Rename(temporary, store.path)
 }
 
-func hourlyDimension(report costmodel.CostReport, dimension costmodel.Dimension) map[string]float64 {
-	buckets := report.ByDimension[dimension]
+func hourlyDimension(report costmodel.CostReport, basis costmodel.Basis, dimension costmodel.Dimension) map[string]float64 {
+	buckets := report.ByDimension[basis][dimension]
 	if len(buckets) == 0 {
 		return nil
 	}
 	hourly := make(map[string]float64, len(buckets))
 	for key, projection := range buckets {
 		hourly[key] = projection.Hourly
+	}
+	return hourly
+}
+
+// UngroupedNodes is the history key for nodes that belong to no node group.
+const UngroupedNodes = "(no node group)"
+
+// hourlyByNodeGroup records billed node cost per node group. Nodes without a
+// group are kept under UngroupedNodes so the groups add up to the node cost.
+func hourlyByNodeGroup(report costmodel.CostReport) map[string]float64 {
+	hourly := hourlyDimension(report, costmodel.BasisProvisioned, costmodel.DimensionParent)
+	grouped := 0.0
+	for _, value := range hourly {
+		grouped += value
+	}
+	nodes := report.ByDimension[costmodel.BasisProvisioned][costmodel.DimensionSubjectKind][string(costmodel.SubjectNode)].Hourly
+	if ungrouped := nodes - grouped; ungrouped > 1e-9 {
+		if hourly == nil {
+			hourly = make(map[string]float64)
+		}
+		hourly[UngroupedNodes] = ungrouped
+	}
+	return hourly
+}
+
+// hourlyByNamespace records what each namespace consumes of the bill: its
+// workloads' requests plus its volumes. Idle and shared are stored separately.
+func hourlyByNamespace(report costmodel.CostReport) map[string]float64 {
+	hourly := make(map[string]float64)
+	for _, row := range report.Allocation[costmodel.DimensionNamespace] {
+		if row.Kind == costmodel.AllocationConsumer && row.Cost.Hourly > 0 {
+			hourly[row.Key] = row.Cost.Hourly
+		}
+	}
+	if len(hourly) == 0 {
+		return nil
 	}
 	return hourly
 }

@@ -126,6 +126,11 @@ type LineItem struct {
 	Confidence  Confidence             `json:"confidence"`
 	Assumptions []Assumption           `json:"assumptions,omitempty"`
 	Detail      map[string]interface{} `json:"detail,omitempty"`
+	// Used is the observed usage of a requested item, when metrics exist.
+	// UsedComponents prices it at the same rates as the requests, so the two
+	// can be compared component by component.
+	Used           *Usage                `json:"used,omitempty"`
+	UsedComponents map[Component]float64 `json:"usedComponents,omitempty"`
 }
 
 // Priced reports whether the item contributes to totals. Items without a
@@ -142,6 +147,8 @@ const (
 	DimensionSubjectKind Dimension = "subjectKind"
 	DimensionParent      Dimension = "parent"
 	DimensionComponent   Dimension = "component"
+	// DimensionWorkload keeps one row per consumer: a workload or a volume.
+	DimensionWorkload Dimension = "workload"
 )
 
 // Scope describes what a report covers.
@@ -155,20 +162,34 @@ type Scope struct {
 // CostReport is the single artifact consumed by the Cost Explorer UI and by
 // the Optimizations rules.
 type CostReport struct {
-	GeneratedAt time.Time                           `json:"generatedAt"`
-	Scope       Scope                               `json:"scope"`
-	Currency    string                              `json:"currency"`
-	Items       []LineItem                          `json:"items"`
-	Totals      map[Basis]Projection                `json:"totals"`
-	Idle        Projection                          `json:"idle"`
-	ByDimension map[Dimension]map[string]Projection `json:"byDimension"`
-	Assumptions []Assumption                        `json:"assumptions,omitempty"`
-	Warnings    []Warning                           `json:"warnings,omitempty"`
+	GeneratedAt time.Time            `json:"generatedAt"`
+	Scope       Scope                `json:"scope"`
+	Currency    string               `json:"currency"`
+	Items       []LineItem           `json:"items"`
+	Totals      map[Basis]Projection `json:"totals"`
+	// Idle is node capacity that is billed but not requested. Flat fees and
+	// volumes are not idle: they are reported as Shared and as consumers.
+	Idle            Projection               `json:"idle"`
+	IdleByComponent map[Component]Projection `json:"idleByComponent"`
+	// Shared is billed cost that no workload requests by design, such as the
+	// managed control plane.
+	Shared Projection `json:"shared"`
+	// ByDimension is keyed by basis first, so a breakdown never mixes what the
+	// provider bills with what the workloads request.
+	ByDimension map[Basis]map[Dimension]map[string]Projection `json:"byDimension"`
+	// Allocation splits the billed total between its consumers, idle capacity
+	// and shared costs. The rows of each dimension add up to the provisioned total.
+	Allocation map[Dimension][]AllocationRow `json:"allocation"`
+	// Usage compares observed usage with requests. It is nil when no usage
+	// was collected.
+	Usage       *UsageSummary `json:"usage,omitempty"`
+	Assumptions []Assumption  `json:"assumptions,omitempty"`
+	Warnings    []Warning     `json:"warnings,omitempty"`
 }
 
-// NewReport aggregates line items into a report. Totals are kept separate per
-// basis, and Idle is the provisioned-minus-requested gap that drives the
-// Optimizations module.
+// NewReport aggregates line items into a report. Totals and breakdowns are
+// kept separate per basis, and the billed total is reconciled into consumers,
+// idle node capacity and shared costs.
 func NewReport(generatedAt time.Time, scope Scope, items []LineItem, warnings []Warning) CostReport {
 	report := CostReport{
 		GeneratedAt: generatedAt,
@@ -176,13 +197,14 @@ func NewReport(generatedAt time.Time, scope Scope, items []LineItem, warnings []
 		Currency:    CurrencyUSD,
 		Items:       items,
 		Totals:      make(map[Basis]Projection),
-		ByDimension: make(map[Dimension]map[string]Projection),
+		ByDimension: make(map[Basis]map[Dimension]map[string]Projection),
 		Warnings:    warnings,
 	}
 
 	hourlyByBasis := make(map[Basis]float64)
-	hourlyByDimension := make(map[Dimension]map[string]float64)
+	hourlyByDimension := make(map[Basis]map[Dimension]map[string]float64)
 	seenAssumptions := make(map[Assumption]bool)
+	ledger := newAllocationLedger()
 
 	for index := range items {
 		item := &items[index]
@@ -193,6 +215,7 @@ func NewReport(generatedAt time.Time, scope Scope, items []LineItem, warnings []
 				report.Assumptions = append(report.Assumptions, assumption)
 			}
 		}
+		ledger.add(*item)
 		if !item.Priced() {
 			report.Warnings = append(report.Warnings, Warning{
 				Code:    "unpriced-subject",
@@ -203,30 +226,38 @@ func NewReport(generatedAt time.Time, scope Scope, items []LineItem, warnings []
 		}
 
 		hourlyByBasis[item.Basis] += item.HourlyUSD
-		addDimension(hourlyByDimension, DimensionSubjectKind, string(item.Subject.Kind), item.HourlyUSD)
+		buckets := hourlyByDimension[item.Basis]
+		if buckets == nil {
+			buckets = make(map[Dimension]map[string]float64)
+			hourlyByDimension[item.Basis] = buckets
+		}
+		addDimension(buckets, DimensionSubjectKind, string(item.Subject.Kind), item.HourlyUSD)
 		if item.Subject.Namespace != "" {
-			addDimension(hourlyByDimension, DimensionNamespace, item.Subject.Namespace, item.HourlyUSD)
+			addDimension(buckets, DimensionNamespace, item.Subject.Namespace, item.HourlyUSD)
 		}
 		if item.Subject.ParentID != "" {
-			addDimension(hourlyByDimension, DimensionParent, item.Subject.ParentID, item.HourlyUSD)
+			addDimension(buckets, DimensionParent, item.Subject.ParentID, item.HourlyUSD)
 		}
 		for component, hourly := range item.Components {
-			addDimension(hourlyByDimension, DimensionComponent, string(component), hourly)
+			addDimension(buckets, DimensionComponent, string(component), hourly)
 		}
 	}
 
 	for basis, hourly := range hourlyByBasis {
 		report.Totals[basis] = Project(hourly)
 	}
-	for dimension, buckets := range hourlyByDimension {
-		projected := make(map[string]Projection, len(buckets))
-		for key, hourly := range buckets {
-			projected[key] = Project(hourly)
+	for basis, dimensions := range hourlyByDimension {
+		report.ByDimension[basis] = make(map[Dimension]map[string]Projection, len(dimensions))
+		for dimension, buckets := range dimensions {
+			projected := make(map[string]Projection, len(buckets))
+			for key, hourly := range buckets {
+				projected[key] = Project(hourly)
+			}
+			report.ByDimension[basis][dimension] = projected
 		}
-		report.ByDimension[dimension] = projected
 	}
 
-	report.Idle = report.Totals[BasisProvisioned].Sub(report.Totals[BasisRequested])
+	ledger.finish(&report)
 	sortAssumptions(report.Assumptions)
 
 	return report
