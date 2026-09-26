@@ -26,6 +26,11 @@ type Sample struct {
 	ProvisionedHourly float64
 	RequestedHourly   float64
 	IdleHourly        float64
+	SharedHourly      float64
+	// HourlyByNamespace is what each namespace consumes of the bill.
+	HourlyByNamespace map[string]float64
+	// HourlyByNodeGroup is the billed node cost per node group.
+	HourlyByNodeGroup map[string]float64
 }
 
 // Point is the spend inside one bucket. CoveredHours against BucketHours tells
@@ -36,8 +41,12 @@ type Point struct {
 	ProvisionedUSD float64   `json:"provisionedUSD"`
 	RequestedUSD   float64   `json:"requestedUSD"`
 	IdleUSD        float64   `json:"idleUSD"`
+	SharedUSD      float64   `json:"sharedUSD"`
 	CoveredHours   float64   `json:"coveredHours"`
 	BucketHours    float64   `json:"bucketHours"`
+	// ByNamespace is the spend each namespace consumed inside the bucket.
+	ByNamespace map[string]float64 `json:"byNamespace,omitempty"`
+	ByNodeGroup map[string]float64 `json:"byNodeGroup,omitempty"`
 }
 
 // Coverage is the share of the bucket backed by samples, from 0 to 1.
@@ -58,8 +67,45 @@ type Series struct {
 	TotalProvisionedUSD float64   `json:"totalProvisionedUSD"`
 	TotalRequestedUSD   float64   `json:"totalRequestedUSD"`
 	TotalIdleUSD        float64   `json:"totalIdleUSD"`
-	CoveredHours        float64   `json:"coveredHours"`
-	WindowHours         float64   `json:"windowHours"`
+	TotalSharedUSD      float64   `json:"totalSharedUSD"`
+	// TotalByNamespace is the spend each namespace consumed over the window.
+	TotalByNamespace map[string]float64 `json:"totalByNamespace,omitempty"`
+	TotalByNodeGroup map[string]float64 `json:"totalByNodeGroup,omitempty"`
+	CoveredHours     float64            `json:"coveredHours"`
+	WindowHours      float64            `json:"windowHours"`
+}
+
+// Summary is the headline of a series without its buckets, used to compare
+// one window against the one before it.
+type Summary struct {
+	ProvisionedUSD float64 `json:"provisionedUSD"`
+	RequestedUSD   float64 `json:"requestedUSD"`
+	IdleUSD        float64 `json:"idleUSD"`
+	SharedUSD      float64 `json:"sharedUSD"`
+	CoveredHours   float64 `json:"coveredHours"`
+	WindowHours    float64 `json:"windowHours"`
+}
+
+// Summary drops the buckets and keeps the totals.
+func (series Series) Summary() Summary {
+	return Summary{
+		ProvisionedUSD: series.TotalProvisionedUSD,
+		RequestedUSD:   series.TotalRequestedUSD,
+		IdleUSD:        series.TotalIdleUSD,
+		SharedUSD:      series.TotalSharedUSD,
+		CoveredHours:   series.CoveredHours,
+		WindowHours:    series.WindowHours,
+	}
+}
+
+// AverageProvisionedHourly is the billed rate over the covered hours only.
+// Windows with different coverage can only be compared through this rate:
+// their totals depend on how long the app was running.
+func (summary Summary) AverageProvisionedHourly() float64 {
+	if summary.CoveredHours <= 0 {
+		return 0
+	}
+	return summary.ProvisionedUSD / summary.CoveredHours
 }
 
 // Coverage is the share of the whole window backed by samples.
@@ -71,18 +117,20 @@ func (series Series) Coverage() float64 {
 }
 
 // Build integrates the samples over [from, to). A sample's rates apply from
-// its timestamp until the next sample, capped at maxGap.
+// its timestamp until the next sample, capped at maxGap. Day buckets start at
+// midnight in the location of from, so callers choose the calendar.
 func Build(samples []Sample, from, to time.Time, bucket Bucket, maxGap time.Duration) Series {
 	if maxGap <= 0 {
 		maxGap = DefaultMaxGap
 	}
+	location := from.Location()
 	from, to = from.UTC(), to.UTC()
 
 	series := Series{
 		Bucket:      bucket,
 		From:        from,
 		To:          to,
-		Points:      buildBuckets(from, to, bucket),
+		Points:      buildBuckets(from, to, bucket, location),
 		WindowHours: hoursBetween(from, to),
 	}
 	if !to.After(from) || len(series.Points) == 0 {
@@ -107,7 +155,10 @@ func Build(samples []Sample, from, to time.Time, bucket Bucket, maxGap time.Dura
 		series.TotalProvisionedUSD += point.ProvisionedUSD
 		series.TotalRequestedUSD += point.RequestedUSD
 		series.TotalIdleUSD += point.IdleUSD
+		series.TotalSharedUSD += point.SharedUSD
 		series.CoveredHours += point.CoveredHours
+		series.TotalByNamespace = addAll(series.TotalByNamespace, point.ByNamespace, 1)
+		series.TotalByNodeGroup = addAll(series.TotalByNodeGroup, point.ByNodeGroup, 1)
 	}
 	return series
 }
@@ -126,25 +177,30 @@ func applyInterval(series *Series, sample Sample, start, end time.Time) {
 		point.ProvisionedUSD += sample.ProvisionedHourly * hours
 		point.RequestedUSD += sample.RequestedHourly * hours
 		point.IdleUSD += sample.IdleHourly * hours
+		point.SharedUSD += sample.SharedHourly * hours
 		point.CoveredHours += hours
+		point.ByNamespace = addAll(point.ByNamespace, sample.HourlyByNamespace, hours)
+		point.ByNodeGroup = addAll(point.ByNodeGroup, sample.HourlyByNodeGroup, hours)
 	}
 }
 
-func buildBuckets(from, to time.Time, bucket Bucket) []Point {
+func buildBuckets(from, to time.Time, bucket Bucket, location *time.Location) []Point {
 	if !to.After(from) {
 		return nil
 	}
 
-	step := time.Hour
 	start := from.Truncate(time.Hour)
+	next := func(cursor time.Time) time.Time { return cursor.Add(time.Hour) }
 	if bucket == BucketDay {
-		step = 24 * time.Hour
-		start = time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)
+		local := from.In(location)
+		start = time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC()
+		// AddDate keeps midnight across daylight saving changes.
+		next = func(cursor time.Time) time.Time { return cursor.In(location).AddDate(0, 0, 1).UTC() }
 	}
 
 	points := make([]Point, 0)
-	for cursor := start; cursor.Before(to); cursor = cursor.Add(step) {
-		bucketEnd := cursor.Add(step)
+	for cursor := start; cursor.Before(to); cursor = next(cursor) {
+		bucketEnd := next(cursor)
 		windowStart := latest(cursor, from)
 		windowEnd := earliest(bucketEnd, to)
 		points = append(points, Point{
@@ -154,6 +210,17 @@ func buildBuckets(from, to time.Time, bucket Bucket) []Point {
 		})
 	}
 	return points
+}
+
+// addAll adds every value of more, multiplied by factor, into target.
+func addAll(target, more map[string]float64, factor float64) map[string]float64 {
+	for key, value := range more {
+		if target == nil {
+			target = make(map[string]float64)
+		}
+		target[key] += value * factor
+	}
+	return target
 }
 
 func hoursBetween(start, end time.Time) float64 {

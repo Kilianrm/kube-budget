@@ -119,3 +119,35 @@ func TestBuildWithoutSamplesReportsNoCoverage(t *testing.T) {
 		t.Errorf("coverage = %v, want none", series.Coverage())
 	}
 }
+
+func TestBuildIntegratesSharedAndNamespaceSpend(t *testing.T) {
+	samples := []Sample{
+		{At: base, ProvisionedHourly: 3, SharedHourly: 0.5, HourlyByNamespace: map[string]float64{"prod": 1, "ops": 0.5}},
+		{At: base.Add(time.Hour), ProvisionedHourly: 3, SharedHourly: 0.5, HourlyByNamespace: map[string]float64{"prod": 2}},
+	}
+
+	series := Build(samples, base, base.Add(2*time.Hour), BucketHour, time.Hour)
+
+	if !nearly(series.TotalSharedUSD, 1) {
+		t.Errorf("shared total = %v, want 1", series.TotalSharedUSD)
+	}
+	if !nearly(series.TotalByNamespace["prod"], 3) || !nearly(series.TotalByNamespace["ops"], 0.5) {
+		t.Errorf("namespace totals = %+v, want prod 3 and ops 0.5", series.TotalByNamespace)
+	}
+	if !nearly(series.Points[1].ByNamespace["prod"], 2) {
+		t.Errorf("second bucket = %+v, want prod 2", series.Points[1].ByNamespace)
+	}
+}
+
+// Two windows with different coverage compare through their average rate.
+func TestSummaryAverageRateIgnoresUncoveredTime(t *testing.T) {
+	series := Build([]Sample{{At: base, ProvisionedHourly: 4}}, base, base.Add(10*time.Hour), BucketHour, 2*time.Hour)
+
+	summary := series.Summary()
+	if !nearly(summary.ProvisionedUSD, 8) || !nearly(summary.CoveredHours, 2) {
+		t.Fatalf("summary = %+v, want 8 USD over 2 covered hours", summary)
+	}
+	if !nearly(summary.AverageProvisionedHourly(), 4) {
+		t.Errorf("average rate = %v, want 4", summary.AverageProvisionedHourly())
+	}
+}
