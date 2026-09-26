@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	kubernetesadapter "kube-budget/internal/adapters/kubernetes"
@@ -29,10 +30,37 @@ import (
 const (
 	clusterConnectionTimeout = 10 * time.Second
 	clusterCollectionTimeout = 30 * time.Second
+	// snapshotReuseWindow is how long a collected snapshot answers other
+	// requests for the same cluster. The Cluster section and the cost report
+	// both ask for one when the app opens; they share one collection.
+	snapshotReuseWindow = 10 * time.Second
 )
 
 // ClusterAdapter exposes kubeconfig-backed cluster operations to the dashboard.
-type ClusterAdapter struct{}
+type ClusterAdapter struct {
+	costMutex sync.Mutex
+	lastCosts map[string]costCache
+
+	snapshotMutex sync.Mutex
+	snapshots     map[ClusterSnapshotRequest]*snapshotCall
+
+	captureMutex sync.Mutex
+	lastCaptures map[string]lastCapture
+}
+
+// lastCapture is the latest report written to a cluster's spend history.
+type lastCapture struct {
+	at   time.Time
+	rate float64
+}
+
+// snapshotCall is one collection, in flight until done is closed.
+type snapshotCall struct {
+	done        chan struct{}
+	snapshot    clustermode.Snapshot
+	err         error
+	collectedAt time.Time
+}
 
 type KubeconfigContextsRequest struct {
 	KubeconfigPath string `json:"kubeconfigPath"`
@@ -236,6 +264,42 @@ func (adapter *ClusterAdapter) TestConnection(request ClusterConnectionRequest) 
 }
 
 func (adapter *ClusterAdapter) GetClusterSnapshot(request ClusterSnapshotRequest) (clustermode.Snapshot, error) {
+	return adapter.sharedSnapshot(request, adapter.collectSnapshot, time.Now)
+}
+
+// sharedSnapshot joins a collection already in flight for the same request,
+// or reuses one finished within snapshotReuseWindow, before collecting again.
+func (adapter *ClusterAdapter) sharedSnapshot(request ClusterSnapshotRequest, collect func(ClusterSnapshotRequest) (clustermode.Snapshot, error), now func() time.Time) (clustermode.Snapshot, error) {
+	adapter.snapshotMutex.Lock()
+	if adapter.snapshots == nil {
+		adapter.snapshots = make(map[ClusterSnapshotRequest]*snapshotCall)
+	}
+	call := adapter.snapshots[request]
+	if call != nil {
+		select {
+		case <-call.done:
+			if call.err != nil || now().Sub(call.collectedAt) > snapshotReuseWindow {
+				call = nil
+			}
+		default:
+		}
+	}
+	if call == nil {
+		call = &snapshotCall{done: make(chan struct{})}
+		adapter.snapshots[request] = call
+		go func() {
+			call.snapshot, call.err = collect(request)
+			call.collectedAt = now()
+			close(call.done)
+		}()
+	}
+	adapter.snapshotMutex.Unlock()
+
+	<-call.done
+	return call.snapshot, call.err
+}
+
+func (adapter *ClusterAdapter) collectSnapshot(request ClusterSnapshotRequest) (clustermode.Snapshot, error) {
 	if strings.TrimSpace(request.Context) == "" {
 		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: context is required")
 	}
@@ -257,10 +321,7 @@ func (adapter *ClusterAdapter) GetClusterSnapshot(request ClusterSnapshotRequest
 		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: discover server version: %w", err)
 	}
 
-	namespace := strings.TrimSpace(request.Namespace)
-	if strings.EqualFold(namespace, "all namespaces") {
-		namespace = ""
-	}
+	namespace := collectionNamespace(request.Namespace)
 	collector := kubernetesadapter.NewCollector(client, clustermode.ClusterInfo{
 		Context: request.Context,
 		Server:  redactServerURL(clientConfig.Host),
@@ -269,20 +330,35 @@ func (adapter *ClusterAdapter) GetClusterSnapshot(request ClusterSnapshotRequest
 	ctx, cancel := context.WithTimeout(context.Background(), clusterCollectionTimeout)
 	defer cancel()
 
+	// The cloud provider's metadata does not depend on the Kubernetes API, so
+	// both are read at the same time.
+	var metadata *clustermode.ProviderMetadata
+	var metadataErr error
+	var metadataDone sync.WaitGroup
+	if strings.EqualFold(strings.TrimSpace(request.Provider), "aws-eks") {
+		metadataDone.Add(1)
+		go func() {
+			defer metadataDone.Done()
+			providerClient, err := awsprovider.NewEKSClient(ctx, request.Region, request.Profile, request.RoleARN)
+			if err != nil {
+				metadataErr = err
+				return
+			}
+			metadata, metadataErr = providerClient.Metadata(ctx, request.ClusterName, request.Region)
+		}()
+	}
+
 	snapshot, err := clustermode.New(collector).Snapshot(ctx)
+	metadataDone.Wait()
 	if err != nil {
 		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: collect resources: %w", err)
 	}
-	if strings.EqualFold(strings.TrimSpace(request.Provider), "aws-eks") {
-		providerClient, providerErr := awsprovider.NewEKSClient(ctx, request.Region, request.Profile, request.RoleARN)
-		if providerErr != nil {
-			snapshot.Warnings = append(snapshot.Warnings, clustermode.Warning{Resource: "AWS provider", Message: providerErr.Error()})
-		} else if metadata, metadataErr := providerClient.Metadata(ctx, request.ClusterName, request.Region); metadataErr != nil {
-			snapshot.Warnings = append(snapshot.Warnings, clustermode.Warning{Resource: "AWS provider", Message: metadataErr.Error()})
-		} else {
-			snapshot.Provider = metadata
-		}
+	if metadataErr != nil {
+		snapshot.Warnings = append(snapshot.Warnings, clustermode.Warning{Resource: "AWS provider", Message: metadataErr.Error()})
+	} else if metadata != nil {
+		snapshot.Provider = metadata
 	}
+	snapshot.Platform = clusterPlatform(snapshot.Nodes, request.Provider, request.Region)
 	return snapshot, nil
 }
 
@@ -403,4 +479,14 @@ func redactServerURL(server string) string {
 	}
 	parsed.User = nil
 	return parsed.String()
+}
+
+// collectionNamespace maps the UI's "All namespaces" choice onto the empty
+// namespace the Kubernetes client uses for a cluster-wide list.
+func collectionNamespace(namespace string) string {
+	namespace = strings.TrimSpace(namespace)
+	if strings.EqualFold(namespace, "all namespaces") {
+		return ""
+	}
+	return namespace
 }

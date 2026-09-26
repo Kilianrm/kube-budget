@@ -99,13 +99,21 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 		return ManifestResult{}, fmt.Errorf("manifest adapter: instance type is required")
 	}
 
+	estimate, _, err := priceManifest(document.Content, selectedProvider, region, instanceType)
+	return estimate, err
+}
+
+// priceManifest estimates a manifest with one provider's rates for one
+// machine type. Catalog pricing and connected-cluster pricing both use it, so
+// the two modes can only differ in the rates they pass.
+func priceManifest(content string, selectedProvider providers.Provider, region, instanceType string) (ManifestResult, manifestmode.Result, error) {
 	config, err := selectedProvider.NewPriceConfig(instanceType, region)
 	if err != nil {
-		return ManifestResult{}, err
+		return ManifestResult{}, manifestmode.Result{}, err
 	}
-	result, err := manifestmode.New(config).Estimate([]byte(document.Content))
+	result, err := manifestmode.New(config).Estimate([]byte(content))
 	if err != nil {
-		return ManifestResult{}, err
+		return ManifestResult{}, manifestmode.Result{}, err
 	}
 
 	resources := make([]ResourceResult, 0, len(result.Workload.Resources))
@@ -132,7 +140,7 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 			Resources:   resources,
 		},
 		Pricing: PricingResult{
-			Provider:     provider,
+			Provider:     selectedProvider.Name(),
 			Region:       region,
 			InstanceType: instanceType,
 		},
@@ -145,7 +153,7 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 		MaxTotal:     result.Estimate.MaxTotal,
 		MinCost:      projectBound(result.Estimate.MinTotal),
 		MaxCost:      projectBound(result.Estimate.MaxTotal),
-	}, nil
+	}, result, nil
 }
 
 func projectBound(hourlyUSD *float64) *costmodel.Projection {
