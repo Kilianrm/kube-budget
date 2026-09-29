@@ -412,9 +412,26 @@ report twice and risking two different numbers on screen.
    Marking it applied is idempotent: it moves to Applied as *pending* and stays in the plan's
    savings, because the bill has not moved yet. The first report that no longer detects its ID
    confirms it (`recommendations.Store.Confirm`), after which the same ID can come back as a new
-   occurrence. "Not applied, reopen" withdraws a pending mark. Every action (applied, confirmed,
-   reopened, dismissed, restored) goes to a per-cluster history log of 200 entries, shown in
-   the History tab. Stores write only when the state actually changed.
+   occurrence. "Not applied, reopen" withdraws a pending mark (see 20 for how applying works
+   now). A recommendation that disappears without being applied or dismissed is not assumed
+   applied: it can vanish for many reasons (a transient cluster state, a missed metrics sample,
+   usage near a threshold, another step changing, an unrelated change). The store tracks it as
+   `Absent`; once `goneAfter` (2) reports in a row miss it, it is logged as "No longer detected",
+   with no saving claimed, and as "Detected again" if it returns, so a flicker never reaches the
+   log. The user can claim a logged absence ("Record as applied", `Store.Claim`) within 30 days:
+   it is then confirmed at once, flagged `unmarked`, dated to the last report that detected it
+   (`State.DetectedAt`), with the rates seen then. Entries written as "resolved" by versions that
+   recorded disappearances automatically stay as they were. Items of a recommendation are tracked
+   one by one (`SeparateItems`: orphan volumes, unusable nodes, rightsizing; `Progress`) only
+   while it is being applied; each keeps its last detected snapshot, so the resource table lists
+   what is left and, below it, what is done with the change and command it had. The confirmed
+   entry carries every done item with its own date, plus the recommendation as last detected
+   (`Details`), so a confirmed row expands to its rationale, instructions and commands. Every
+   action (started applying, confirmed, item done, no longer detected, detected again, recorded
+   as applied, stopped applying, dismissed, restored) goes to a per-cluster history log of 200
+   entries. The tabs follow the life of a recommendation: Open, In progress (frozen cards), Done
+   (claimable "no longer detected" ones, the confirmed changes, and the activity log folded
+   away), Dismissed. Stores write only when the state actually changed.
 16. **Supported clusters** — DONE. Every snapshot carries a `platform`: the cloud read from the
    nodes' `providerID` scheme (`aws`, `gce`, `azure`; `kind`, `k3s`… are not clouds), the most
    common region label, and whether a price catalog covers both (`clusterPlatform`). An EKS
@@ -422,6 +439,71 @@ report twice and risking two different numbers on screen.
    report prices with the detected platform, so an EKS cluster added through a plain kubeconfig
    context is priced too. An unsupported cluster locks the Cost section with the reason and
    disables Manifest's "Connected cluster" pricing; the Cluster section works everywhere.
+17. **Node-count command on EKS** — DONE. For clusters connected through EKS, the plan gets
+   the cluster name, region and each node group's desired and minimum size (`Inputs.EKS`).
+   "Run on N fewer nodes" then names the largest on-demand group and gives the
+   `aws eks update-nodegroup-config` command that shrinks it, lowering the minimum too when
+   needed, plus a `kubectl get nodes` check. Deleting a node would not save anything: the node
+   group replaces it. When the cut would empty that group, or outside EKS, only the per-group
+   summary is shown.
+
+18. **EKS without the EKS connection** — DONE. A kubeconfig context that authenticates with
+   `aws eks get-token` (what `aws eks update-kubeconfig` writes) names the cluster, region, profile
+   and role; the snapshot reads the EKS metadata with that identity, exactly as the EKS
+   connection does (`eksTargetFor`). Other authenticators are left alone. Nodes also carry their
+   `eks.amazonaws.com/nodegroup` and `capacityType` labels, which now decide the node group and
+   purchase option first; matching by instance type is the fallback, since two groups can share
+   a type. When the EKS call fails, a warning says so and the labels still group and price the
+   nodes, but node-count changes have no command, because the group sizes are unknown.
+
+19. **Machine-type commands on EKS** — DONE. A node group's instance type cannot change in place,
+   so "Switch to X nodes" gives ordered `Steps` instead of one command: create a group of the new
+   type copied from the old one (launch template, AMI type unless `CUSTOM`, subnets, role, labels
+   without `alpha.eksctl.io/` and `eks.amazonaws.com/`, taints) and sized for the steps above; wait
+   for it; cordon and drain the old group by its `eks.amazonaws.com/nodegroup` label; delete it.
+   Only when a single on-demand group running only the old type holds the pool; otherwise the row
+   keeps the summary.
+20. **Applying freezes a recommendation** — DONE. A plan recomputed from every report reacts to a
+   cluster halfway through a change: creating the new node group makes "Run on 2 fewer nodes"
+   appear, cordoning makes "Recover or remove 2 nodes" appear, and the recommendation being applied
+   drops out at the first step and was confirmed early. "Start applying" (formerly "Mark as
+   applied") now stores the recommendation as it is (`Applied.Details`), and the plan shows that
+   frozen copy instead of the live one (`Inputs.Applying`). Its progress is read from the cluster:
+   items that are changes of their own are `Done` once the live plan no longer lists them; node
+   changes carry a `Target` and are checked by `Milestones` (group size; new group ACTIVE, old nodes
+   cordoned, old group deleted; spot share). It is confirmed only when `Complete`. While a node
+   recommendation is applied, or an EKS node group is CREATING, UPDATING or DELETING
+   (`Inputs.NodeTransition`), the other node steps pause (`Plan.Paused`), rightsizing claims no
+   node saving, and paused steps are carried over so none is recorded as resolved. The waterfall
+   counts what is left of a frozen saving. Marks made before freezing have no details and follow
+   the live recommendation as before.
+
+21. **Spot commands on EKS** — DONE. With one on-demand EKS group, "Run stateless workloads on
+   spot" gives ordered steps: create `<group>-spot` with the group's type and up to three priced
+   types of the same size (a spot group with one type is often left without capacity); patch
+   Deployments and CronJobs to prefer `eks.amazonaws.com/capacityType=SPOT` and StatefulSets to
+   require `NotIn SPOT` (safe on nodes without the label); then shrink the on-demand group by the
+   nodes moved, keeping one at least. Groups eksctl created (`alpha.eksctl.io/nodegroup-name`)
+   get `eksctl create nodegroup --spot` and `eksctl scale nodegroup`, so the new group owns its
+   stack, role and launch template: borrowing the old group's, as the machine-type commands do,
+   makes `eksctl delete cluster` fail on the old group's role. eksctl takes no taints on the command
+   line, so a tainted eksctl group gets no commands. Milestones: spot group active, on-demand group
+   shrunk, spot share reached. The catalog gains `m5.large` and `m7i.large`, neither cheaper than
+   `m6i.large`, as fallbacks.
+
+22. **A waterfall that explains itself** — DONE. The plan is rebuilt from every report, so it
+   moves while changes are made; it now says why instead of letting bars appear and vanish. Steps
+   keep the plan's order. A step being applied shows what is left and, apart, what it already
+   saved (`Step.Achieved`). A node step paused by a node change keeps its last known value
+   (`Inputs.LastKnown`, from the report before), shown in brackets and left out of the total, and
+   its card stays in Open with Start applying disabled: one node change runs at a time, since node
+   steps resize the same groups and assume one another; workload and storage changes run beside
+   it. Today's bill lists what a change in progress adds only until it finishes, such as a new
+   group running beside the one it replaces (`Plan.Temporary`). Against the report before
+   (`State.Previous`), steps are marked new or changed ("was −$X"), and steps that left the plan are
+   listed as done or gone (`Plan.Gone`). A line sums what the bill did since the oldest confirmed
+   change. Reports are known by `GeneratedAt`: acting on a recommendation replans the same report,
+   which no longer counts as a new one, so two clicks can no longer log a recommendation as gone.
 
 Grouping by team or label is out of scope by decision; allocation stays at namespace and workload.
 
