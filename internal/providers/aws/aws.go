@@ -29,6 +29,14 @@ var awsCatalog = catalog.Catalog{
 			"m6i.large":  {VCPU: 2, MemoryGB: 8, HourlyUSD: 0.096},
 			"m6i.xlarge": {VCPU: 4, MemoryGB: 16, HourlyUSD: 0.192},
 			"c6i.large":  {VCPU: 2, MemoryGB: 4, HourlyUSD: 0.085},
+			// Spot fallbacks for c6i.large. Each costs more on demand, so
+			// c6i.large stays the cheapest compute type the plan proposes.
+			"c7i.large": {VCPU: 2, MemoryGB: 4, HourlyUSD: 0.08925},
+			"c5d.large": {VCPU: 2, MemoryGB: 4, HourlyUSD: 0.096},
+			"c7a.large": {VCPU: 2, MemoryGB: 4, HourlyUSD: 0.10264},
+			// Spot fallbacks for m6i.large, none cheaper on demand.
+			"m5.large":  {VCPU: 2, MemoryGB: 8, HourlyUSD: 0.096},
+			"m7i.large": {VCPU: 2, MemoryGB: 8, HourlyUSD: 0.1008},
 		},
 		"eu-west-1": {
 			"t3.medium":  {VCPU: 2, MemoryGB: 4, HourlyUSD: 0.0464},
