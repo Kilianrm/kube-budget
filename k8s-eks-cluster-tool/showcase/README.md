@@ -19,23 +19,29 @@ showcase/
 | Piece | Why it is there |
 |---|---|
 | `general` node group, 3 × `m6i.large` on-demand | Memory-rich machines under CPU-heavy requests, so the plan can propose a better machine type |
-| `batch-spot` node group, 1 × `c6i.large` spot, tainted | A second node group and purchase option: the explorer splits cost by group and prices spot at its own rate |
+| `batch-spot` node group, 1 spot node (`c6i.large`, falling back to `c7i.large`, `c5d.large` or `c7a.large`), tainted | A second node group and purchase option: the explorer splits cost by group and prices spot at its own rate. Several types let AWS relaunch the node when one type has no spot capacity |
 | `shop/checkout-api` (3 pods, 500m / 1Gi each, near-idle nginx) | The over-requested service: rightsizing flags it and the freed requests let the cluster drop a node |
 | `shop/recommendation-engine` (2 pods, CPU and memory held near the request) | The well-sized service: high efficiency, left alone by the plan |
 | `shop/orders-db` StatefulSet with a 10 GiB volume | Stateful work: storage charged to its namespace, never proposed for spot, volume never called an orphan |
-| `shop/old-backup` 50 GiB claim, written once by a finished Job | The orphan volume: bound and billed, but no running pod mounts it |
+| `shop/old-backup` 50 GiB claim, written once by a Job that was then cleaned up | The orphan volume: bound and billed, but nothing mounts it any more |
 | `batch/queue-worker` on the spot group, `batch/nightly-report` CronJob | Batch work already on spot; Job pods costed only while they run |
 | `platform/node-agent` DaemonSet | Scales with the node count and is left out of the spot estimate |
 | metrics-server | Usage vs requests, efficiency and rightsizing |
 
 All machine types come from the KubeBudget price catalog for `us-east-1`, so
 every node is priced. The two groups use different machine types on purpose:
-KubeBudget matches a node to its node group through the instance type.
+KubeBudget matches a node to its group by its `eks.amazonaws.com/nodegroup`
+label, and falls back to the instance type when the label is missing. Connecting
+with the kubeconfig option works too: KubeBudget reads the cluster, region and
+AWS profile from the `aws eks get-token` command in the kubeconfig. The
+spot fallbacks all cost more than `c6i.large` on demand, so the plan still
+proposes `c6i.large` as the better machine type; only the spot node's own price
+moves a little with the type AWS launches.
 
 ## Cost
 
 About **$0.45 per hour, roughly $10–11 per day** while it runs: the EKS control
-plane ($0.10/h), three `m6i.large` ($0.096/h each), one spot `c6i.large`, 60 GiB
+plane ($0.10/h), three `m6i.large` ($0.096/h each), one spot compute node, 60 GiB
 of gp3 volumes, the node root disks and four public IPv4 addresses. There is no
 NAT gateway, which saves about $1 per day. KubeBudget itself reports about
 $310/month at list prices; it does not price root disks or public IPs.
@@ -102,11 +108,18 @@ Refresh the report once before you start, so the plan uses fresh usage.
 - Storage: delete `old-backup`. Open the resources to show the exact
   `kubectl delete pvc` command and the data-loss note.
 - Nodes: run on one fewer node, then a better machine type (`c6i.large`), then
-  spot for the stateless share.
+  spot for the stateless share. The node-count step shows the exact
+  `aws eks update-nodegroup-config` command for the `general` group.
 - Workloads: rightsizing shows the requests it frees separately from the billed
   saving, which only comes from nodes it lets you remove.
-- Dismiss a recommendation and watch the later steps recalculate. Mark one as
-  applied to show the journal.
+- Dismiss a recommendation and watch the later steps recalculate.
+- Start applying one, for example "Run on 1 fewer node": it freezes, the other
+  node recommendations pause, and after running its command and refreshing, the
+  milestone ticks and the change moves to Confirmed. The machine-type change
+  shows three milestones ticking one by one as you run its steps.
+- Spot: the steps create `general-spot` with eksctl (m6i.large, m5.large,
+  m7i.large), patch the stateless workloads to prefer spot and `orders-db` to
+  stay off it, then shrink `general`.
 
 **3. Scenario: data you cannot trust**
 ```sh

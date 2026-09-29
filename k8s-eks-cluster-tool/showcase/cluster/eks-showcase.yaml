@@ -7,10 +7,14 @@
 #   - machine types from the KubeBudget price catalog (us-east-1), so every node
 #     is priced;
 #   - memory-rich m6i nodes under CPU-heavy requests, so the node-type step has
-#     a better fit (c6i) to propose.
+#     a better fit (c6i) to propose;
+#   - several compute types for the spot group, so AWS can relaunch it when one
+#     type has no spot capacity. All cost more than c6i.large on demand, so the
+#     node-type step still proposes c6i.large.
 #
 # The two groups use different instance types on purpose: KubeBudget matches a
-# node to its node group through the instance type.
+# node to its group by its eks.amazonaws.com/nodegroup label, and falls back to
+# the instance type when a node has no such label.
 apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
@@ -46,7 +50,7 @@ managedNodeGroups:
       workload-tier: general
 
   - name: batch-spot
-    instanceTypes: ["c6i.large"]
+    instanceTypes: ["c6i.large", "c7i.large", "c5d.large", "c7a.large"]
     spot: true
     desiredCapacity: 1
     minSize: 1

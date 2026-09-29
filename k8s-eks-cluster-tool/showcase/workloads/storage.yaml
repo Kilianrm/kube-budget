@@ -11,9 +11,10 @@ allowVolumeExpansion: true
 parameters:
   type: gp3
 ---
-# Story: an orphan volume. A one-off Job wrote a backup to this claim and
-# finished. The claim stays Bound and billed, but no running pod mounts it,
-# so the optimization plan proposes deleting it.
+# Story: an orphan volume. A one-off Job wrote a backup to this claim and was
+# cleaned up afterwards (showcase.sh create deletes it once it completes). The
+# claim stays Bound and billed with nothing referencing it, so the optimization
+# plan proposes deleting it.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

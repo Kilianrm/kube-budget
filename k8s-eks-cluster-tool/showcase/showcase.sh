@@ -115,6 +115,15 @@ k() {
   kubectl --context "$CONTEXT" "$@"
 }
 
+# eksctl rejects --region alongside --config-file, so the region lives in the
+# config itself: render a copy with metadata.region set to the chosen region.
+render_eksctl_config() {
+  EKSCTL_CONFIG=$(mktemp "${TMPDIR:-/tmp}/eks-showcase.XXXXXX.yaml")
+  trap 'rm -f "$EKSCTL_CONFIG"' EXIT
+  sed "s/^  region: .*/  region: $REGION/" "$CLUSTER_CONFIG" >"$EKSCTL_CONFIG"
+  grep -q "^  region: $REGION\$" "$EKSCTL_CONFIG" || fail "could not set the region in $CLUSTER_CONFIG"
+}
+
 require_cluster() {
   require_command aws
   require_command kubectl
@@ -142,19 +151,30 @@ create() {
     printf 'Cluster %s already exists; reusing it.\n' "$CLUSTER_NAME"
   else
     printf 'Creating %s in %s (about 15-20 minutes)...\n' "$CLUSTER_NAME" "$REGION"
-    eksctl create cluster --config-file "$CLUSTER_CONFIG" --region "$REGION" --profile "$PROFILE"
+    render_eksctl_config
+    AWS_PROFILE="$PROFILE" eksctl create cluster --config-file "$EKSCTL_CONFIG"
   fi
   aws_eks update-kubeconfig --name "$CLUSTER_NAME" >/dev/null
   resolve_context
 
   ensure_metrics_server
   k apply -k "$WORKLOADS_DIR"
+  k wait --for=condition=complete job/write-old-backup -n shop --timeout=300s
+  # Clean up the finished Job the way a TTL or a tidy team would, leaving the
+  # volume it wrote behind. Its pod would otherwise keep the claim from being
+  # deleted.
+  k delete job write-old-backup -n shop --ignore-not-found=true
   k rollout status deployment/checkout-api -n shop --timeout=300s
   k rollout status deployment/recommendation-engine -n shop --timeout=300s
   k rollout status statefulset/orders-db -n shop --timeout=300s
-  k rollout status deployment/queue-worker -n batch --timeout=300s
   k rollout status daemonset/node-agent -n platform --timeout=300s
-  k wait --for=condition=complete job/write-old-backup -n shop --timeout=300s
+  # Batch work runs only on the spot group, and AWS can take spot capacity
+  # back and have none to relaunch. That is outside the script's control, so
+  # it is reported instead of stopping the run.
+  if ! k rollout status deployment/queue-worker -n batch --timeout=300s; then
+    printf 'Warning: queue-worker is not ready. Check the batch-spot node group for spot capacity:\n'
+    printf '  aws eks describe-nodegroup --cluster-name %s --nodegroup-name batch-spot --region %s --query nodegroup.health\n' "$CLUSTER_NAME" "$REGION"
+  fi
 
   status
   cat <<EOF
@@ -246,6 +266,10 @@ destroy() {
 
   # Dynamically provisioned EBS volumes outlive the cluster unless their claims
   # are deleted first, and they keep billing.
+  # An unreachable aggregated API keeps namespaces Terminating forever, since
+  # their deletion must list every API first. metrics-server goes with the
+  # cluster anyway, so its registration goes first.
+  k delete apiservice v1beta1.metrics.k8s.io --ignore-not-found=true >/dev/null 2>&1 || true
   printf 'Deleting workloads and volume claims...\n'
   k delete -f "$SCENARIOS_DIR/missing-requests/" --ignore-not-found=true >/dev/null 2>&1 || true
   k delete -k "$WORKLOADS_DIR" --ignore-not-found=true --wait=true || true
@@ -260,7 +284,8 @@ destroy() {
     printf 'Warning: some persistent volumes still exist; check the EC2 console for leftover EBS volumes.\n'
   fi
 
-  eksctl delete cluster --config-file "$CLUSTER_CONFIG" --region "$REGION" --profile "$PROFILE" --wait
+  render_eksctl_config
+  AWS_PROFILE="$PROFILE" eksctl delete cluster --config-file "$EKSCTL_CONFIG" --wait
   printf 'Cluster deleted.\n'
 }
 
