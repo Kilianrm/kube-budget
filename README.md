@@ -209,20 +209,19 @@ In the cluster connection dialog, choose **Amazon EKS**, enter the cluster name 
 - [x] Add live YAML workload inspection.
 - [x] Add cluster connection for Providers (EKS oriented)
 - [x] Add monitoring data support for EKS ( AWS Elastic Kubernetes Service )
-- [ ] Create change-states local simulator
-- [ ] Add cost explorer in cluster section when cluster from provider is linked.
-...
+- [x] Create change-states local simulator
+- [x] Add cost explorer section in Cost Section
+- [x] Add Budget & forecast section in Cost section.
+- [x] Add optimization section in Cost Section.
+- [x] Create enhanced eks cluster to check cost optimization functionality
+- [ ] Enhance Manifest section
 - [ ] Add enhanced estimation in manifest mode when cluster from provider is linked.
-- [ ] Add optimization module when provider is linked. -> OPTIONAL
 ...
 ...
-
-- [ ] Improve manifest converter ( Support more types of manifests)
 - [ ] Add Kubernetes admission webhook support
-- [ ] Add more workload types and resource coverage
 - [ ] Add support to be used in kubectl.
 - [ ] Add a GitHub Action that compares cost deltas in PRs
 ...
-- [ ] Add FINAL documentation - design
+- [ ] Add FINAL documentation - design - showcase...
 - [ ] Add explanation of possible future evolving (cluster persistent information, analyzis behaviour, google cluster support, azure cluster support,llm for predict costs...)
 
