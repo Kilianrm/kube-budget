@@ -37,7 +37,9 @@ type scenario struct {
 	report costmodel.CostReport
 	inputs Inputs
 	// blocked explains why node-level steps cannot trust the demand.
-	blocked    string
+	blocked string
+	// paused explains why node steps wait for a change under way.
+	paused     string
 	nodes      int
 	nodeHourly float64
 	capacity   costmodel.Usage
@@ -59,15 +61,21 @@ type podDemand struct {
 	count    int
 }
 
-type planStep func(scenario) (*Recommendation, scenario)
+// planStep is one step of the plan, with the ID and category of the
+// recommendation it makes, known even when it makes none.
+type planStep struct {
+	id       string
+	category Category
+	run      func(scenario) (*Recommendation, scenario)
+}
 
 var planSteps = []planStep{
-	stepOrphanVolumes,
-	stepUnusableNodes,
-	stepConsolidation,
-	stepRightsizing,
-	stepNodeType,
-	stepSpot,
+	{"orphan-volumes", CategoryStorage, stepOrphanVolumes},
+	{"unusable-nodes", CategoryNodes, stepUnusableNodes},
+	{"consolidate-nodes", CategoryNodes, stepConsolidation},
+	{"rightsize-requests", CategoryWorkloads, stepRightsizing},
+	{"node-type", CategoryNodes, stepNodeType},
+	{"spot-capacity", CategoryNodes, stepSpot},
 }
 
 func newScenario(report costmodel.CostReport, inputs Inputs) scenario {
@@ -203,8 +211,9 @@ func stepOrphanVolumes(current scenario) (*Recommendation, scenario) {
 			Subject: item.Subject,
 			Change:  fmt.Sprintf("%s · %.0f GiB", change, item.Usage.StorageGB),
 			Savings: item.Cost,
+			Check:   fmt.Sprintf("kubectl describe pvc %s -n %s", item.Subject.Name, item.Subject.Namespace),
 			Command: fmt.Sprintf("kubectl delete pvc %s -n %s", item.Subject.Name, item.Subject.Namespace),
-			Note:    "With the Delete reclaim policy this also deletes the data. Snapshot it first if unsure.",
+			Note:    "With the Delete reclaim policy this also deletes the data. Snapshot it first if unsure. If \"Used By\" lists a finished pod, the claim is not removed until that pod is gone: remove a one-off Job that is done, but if a CronJob created it, the claim is needed for the next run, so keep it.",
 		})
 	}
 	if len(items) == 0 {
@@ -212,16 +221,17 @@ func stepOrphanVolumes(current scenario) (*Recommendation, scenario) {
 	}
 
 	return &Recommendation{
-		ID:         "orphan-volumes",
-		Category:   CategoryStorage,
-		Title:      fmt.Sprintf("Delete %s nothing uses", plural(len(items), "volume")),
-		Effort:     LevelLow,
-		Risk:       LevelMedium,
-		Confidence: confidence,
-		Savings:    costmodel.Project(hourly),
-		Rationale:  "A claim is billed for its full size whether or not a pod mounts it, and no running pod mounts these.",
-		Action:     "Check that nothing needs them (a CronJob mounts its claim only while it runs), snapshot what matters, then delete them.",
-		Items:      items,
+		ID:            "orphan-volumes",
+		Category:      CategoryStorage,
+		Title:         fmt.Sprintf("Delete %s nothing uses", plural(len(items), "volume")),
+		Effort:        LevelLow,
+		Risk:          LevelMedium,
+		Confidence:    confidence,
+		Savings:       costmodel.Project(hourly),
+		Rationale:     "A claim is billed for its full size whether or not a pod mounts it, and no running pod mounts these.",
+		SeparateItems: true,
+		Action:        "Check that nothing needs them (a CronJob mounts its claim only while it runs), snapshot what matters, then delete them. A finished Job keeps its pod, and Kubernetes holds the claim until that pod is gone.",
+		Items:         items,
 	}, current
 }
 
@@ -251,16 +261,17 @@ func stepUnusableNodes(current scenario) (*Recommendation, scenario) {
 
 	// The scenario never counted these nodes as capacity, so it is unchanged.
 	return &Recommendation{
-		ID:         "unusable-nodes",
-		Category:   CategoryNodes,
-		Title:      fmt.Sprintf("Recover or remove %s that cannot run pods", plural(len(items), "node")),
-		Effort:     LevelLow,
-		Risk:       LevelLow,
-		Confidence: costmodel.ConfidenceExact,
-		Savings:    costmodel.Project(hourly),
-		Rationale:  "These nodes are billed in full but the scheduler cannot place new pods on them.",
-		Action:     "Recover them, or drain them and remove them from their node group.",
-		Items:      items,
+		ID:            "unusable-nodes",
+		Category:      CategoryNodes,
+		Title:         fmt.Sprintf("Recover or remove %s that cannot run pods", plural(len(items), "node")),
+		Effort:        LevelLow,
+		Risk:          LevelLow,
+		Confidence:    costmodel.ConfidenceExact,
+		Savings:       costmodel.Project(hourly),
+		Rationale:     "These nodes are billed in full but the scheduler cannot place new pods on them.",
+		SeparateItems: true,
+		Action:        "Recover them, or drain them and remove them from their node group.",
+		Items:         items,
 	}, current
 }
 
@@ -276,6 +287,7 @@ func stepConsolidation(current scenario) (*Recommendation, scenario) {
 	removable := current.nodes - needed
 	next := current
 	next.nodes = needed
+	item, target := scaleDownItem(current, removable, needed)
 	return &Recommendation{
 		ID:         "consolidate-nodes",
 		Category:   CategoryNodes,
@@ -287,13 +299,58 @@ func stepConsolidation(current scenario) (*Recommendation, scenario) {
 		Rationale: fmt.Sprintf("Requests total %.1f cores and %.1f GB. Packed pod by pod with %.0f%% headroom and each node's DaemonSets, they fit on %d of the %d usable nodes.",
 			current.demand.CPUCores, current.demand.MemoryGB, headroomFraction*100, needed, current.nodes),
 		Action: "Lower the node groups' desired and minimum size, or let the Cluster Autoscaler or Karpenter remove the spare nodes. Their pods are rescheduled on the rest.",
-		Items: []Item{{
-			Subject: costmodel.Subject{Kind: costmodel.SubjectNodeGroup, Name: "worker nodes"},
-			Change:  fmt.Sprintf("%d → %d nodes", current.nodes, needed),
-			Savings: costmodel.Project(float64(removable) * current.nodeHourly),
-			Note:    nodeGroupSummary(current.report),
-		}},
+		Items:  []Item{item},
+		Target: &target,
 	}, next
+}
+
+// scaleDownItem describes the node-count change and where it ends. On EKS it
+// names the largest on-demand node group and the command that shrinks it; the
+// pool can span several groups, so it gives up when that one group cannot
+// absorb the cut, and the target is then the pool's node count.
+func scaleDownItem(current scenario, removable, needed int) (Item, Target) {
+	item := Item{
+		Subject: costmodel.Subject{Kind: costmodel.SubjectNodeGroup, Name: "worker nodes"},
+		Change:  fmt.Sprintf("%d → %d nodes", current.nodes, needed),
+		Savings: costmodel.Project(float64(removable) * current.nodeHourly),
+		Note:    nodeGroupSummary(current.report),
+	}
+	target := Target{Nodes: needed}
+	eks := current.inputs.EKS
+	if eks == nil {
+		return item, target
+	}
+	groups := onDemandGroups(current.report)
+	var largest nodeGroupCount
+	for _, group := range groups {
+		if group.nodes > largest.nodes {
+			largest = group
+		}
+	}
+	var size *EKSNodeGroup
+	for index := range eks.NodeGroups {
+		if eks.NodeGroups[index].Name == largest.name {
+			size = &eks.NodeGroups[index]
+		}
+	}
+	if size == nil || largest.nodes-removable < 1 || size.Desired-removable < 1 {
+		return item, target
+	}
+
+	desired := size.Desired - removable
+	scaling := fmt.Sprintf("desiredSize=%d", desired)
+	if desired < size.Min {
+		scaling = fmt.Sprintf("minSize=%d,desiredSize=%d", desired, desired)
+	}
+	item.Subject.Name = largest.name
+	item.Change = fmt.Sprintf("%d → %d nodes", size.Desired, desired)
+	item.Check = "kubectl get nodes -L eks.amazonaws.com/nodegroup"
+	item.Command = fmt.Sprintf("aws eks update-nodegroup-config --cluster-name %s --nodegroup-name %s --scaling-config %s --region %s", eks.Name, largest.name, scaling, eks.Region)
+	item.Note = "Shrink the node group, not the node: a deleted node is replaced to keep the desired size. EKS picks the node to remove and drains it first. If the Cluster Autoscaler or Karpenter manages this group, lower its limits instead, or it scales back up."
+	if len(groups) > 1 {
+		item.Note += fmt.Sprintf(" %s is the largest of %d on-demand groups.", largest.name, len(groups))
+	}
+	return item, Target{Group: largest.name, Nodes: desired}
 }
 
 func stepRightsizing(current scenario) (*Recommendation, scenario) {
@@ -368,6 +425,7 @@ func stepRightsizing(current scenario) (*Recommendation, scenario) {
 		Confidence:    costmodel.ConfidenceEstimated,
 		FreedRequests: costmodel.Project(freed),
 		Action:        "Apply the new requests, then watch usage over a full day. Memory set below real peaks gets pods OOM-killed.",
+		SeparateItems: true,
 		Items:         items,
 	}
 
@@ -375,6 +433,10 @@ func stepRightsizing(current scenario) (*Recommendation, scenario) {
 		rightsizeThreshold*100, rightsizeHeadroom*100, millicores(minimumPodCPUCores), mebibytes(minimumPodMemoryGB))
 	if current.blocked != "" {
 		recommendation.Rationale = rationale + " The billed saving is not computed until the data issues are fixed: " + current.blocked + "."
+		return recommendation, current
+	}
+	if current.paused != "" {
+		recommendation.Rationale = rationale + " The billed saving waits for the node change under way: " + current.paused + "."
 		return recommendation, current
 	}
 
@@ -472,6 +534,7 @@ func stepNodeType(current scenario) (*Recommendation, scenario) {
 	next.capacity = bestCapacity
 	next.machineType = best.Name
 	savings := costmodel.Project(currentCost - bestCost)
+	item, target := migrationItem(current, reference.Name, best.Name, bestNodes, savings)
 	return &Recommendation{
 		ID:         "node-type",
 		Category:   CategoryNodes,
@@ -483,12 +546,99 @@ func stepNodeType(current scenario) (*Recommendation, scenario) {
 		Rationale: fmt.Sprintf("After the steps above, requests need %.1f cores and %.1f GB. %s (%.0f vCPU, %.0f GB) fits that CPU-to-memory ratio better than %s (%.0f vCPU, %.0f GB).",
 			current.demand.CPUCores, current.demand.MemoryGB, best.Name, best.VCPU, best.MemoryGB, reference.Name, reference.VCPU, reference.MemoryGB),
 		Action: fmt.Sprintf("Create a node group of %s, cordon and drain the %s nodes, then remove the old group.", best.Name, reference.Name),
-		Items: []Item{{
-			Subject: costmodel.Subject{Kind: costmodel.SubjectNodeGroup, Name: "worker nodes"},
-			Change:  fmt.Sprintf("%d × %s → %d × %s", current.nodes, reference.Name, bestNodes, best.Name),
-			Savings: savings,
-		}},
+		Items:  []Item{item},
+		Target: &target,
 	}, next
+}
+
+// migrationItem describes the machine-type change. On EKS, when one
+// on-demand node group of the old type holds the pool, it gives the commands
+// that replace it with a group of the new type, copied from the old one and
+// sized for the steps above. A group's instance type cannot be changed in
+// place.
+func migrationItem(current scenario, from, to string, nodes int, savings costmodel.Projection) (Item, Target) {
+	item := Item{
+		Subject: costmodel.Subject{Kind: costmodel.SubjectNodeGroup, Name: "worker nodes"},
+		Change:  fmt.Sprintf("%d × %s → %d × %s", current.nodes, from, nodes, to),
+		Savings: savings,
+	}
+	target := Target{Nodes: nodes, FromMachineType: from, MachineType: to}
+	eks := current.inputs.EKS
+	groups := onDemandGroups(current.report)
+	if eks == nil || len(groups) != 1 {
+		return item, target
+	}
+	var old *EKSNodeGroup
+	for index := range eks.NodeGroups {
+		if eks.NodeGroups[index].Name == groups[0].name {
+			old = &eks.NodeGroups[index]
+		}
+	}
+	if old == nil || len(old.InstanceTypes) != 1 || old.InstanceTypes[0] != from || old.NodeRole == "" || len(old.Subnets) == 0 {
+		return item, target
+	}
+
+	name := old.Name + "-" + strings.ReplaceAll(to, ".", "-")
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	create := []string{
+		"aws eks create-nodegroup",
+		"--cluster-name " + eks.Name,
+		"--nodegroup-name " + name,
+		"--instance-types " + to,
+		"--capacity-type ON_DEMAND",
+		fmt.Sprintf("--scaling-config minSize=%d,maxSize=%d,desiredSize=%d", min(old.Min, nodes), max(old.Max, nodes), nodes),
+		"--subnets " + strings.Join(old.Subnets, " "),
+		"--node-role " + old.NodeRole,
+	}
+	// The launch template carries the disks; a CUSTOM AMI type means it
+	// carries the image too, and then no AMI type may be given.
+	if old.LaunchTemplateID != "" {
+		create = append(create, fmt.Sprintf("--launch-template id=%s,version=%s", old.LaunchTemplateID, old.LaunchTemplateVersion))
+	}
+	if old.AmiType != "" && old.AmiType != "CUSTOM" {
+		create = append(create, "--ami-type "+old.AmiType)
+	}
+	if labels := copiedLabels(old.Labels); labels != "" {
+		create = append(create, "--labels "+labels)
+	}
+	if len(old.Taints) > 0 {
+		create = append(create, "--taints "+strings.Join(old.Taints, " "))
+	}
+	create = append(create, "--region "+eks.Region)
+
+	selector := "-l eks.amazonaws.com/nodegroup=" + old.Name
+	item.Subject.Name = old.Name
+	item.Check = "kubectl get nodes -L eks.amazonaws.com/nodegroup,node.kubernetes.io/instance-type"
+	item.Steps = []string{
+		strings.Join(create, " "),
+		fmt.Sprintf("aws eks wait nodegroup-active --cluster-name %s --nodegroup-name %s --region %s", eks.Name, name, eks.Region),
+		"kubectl cordon " + selector,
+		"kubectl drain " + selector + " --ignore-daemonsets --delete-emptydir-data",
+		fmt.Sprintf("aws eks delete-nodegroup --cluster-name %s --nodegroup-name %s --region %s", eks.Name, old.Name, eks.Region),
+	}
+	item.Note = fmt.Sprintf("The new group copies %s's launch template, AMI type, subnets, role, labels and taints, and is sized for the steps above. Workloads that select the old group by name (eks.amazonaws.com/nodegroup=%s) must be changed first, or they stay Pending.", old.Name, old.Name)
+	target.Group, target.NewGroup = old.Name, name
+	return item, target
+}
+
+// copiedLabels are the labels a replacement group keeps, sorted, as the AWS
+// CLI takes them. Labels that name the old group are its own.
+func copiedLabels(labels map[string]string) string {
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		if strings.HasPrefix(key, "alpha.eksctl.io/") || strings.HasPrefix(key, "eks.amazonaws.com/") {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		pairs = append(pairs, key+"="+labels[key])
+	}
+	return strings.Join(pairs, ",")
 }
 
 func stepSpot(current scenario) (*Recommendation, scenario) {
@@ -525,12 +675,18 @@ func stepSpot(current scenario) (*Recommendation, scenario) {
 	next.nodeHourly = current.nodeHourly * (1 - moved*(1-ratio))
 
 	items := make([]Item, 0)
-	for _, group := range onDemandGroups(current.report) {
-		items = append(items, Item{
-			Subject: costmodel.Subject{Kind: costmodel.SubjectNodeGroup, Name: group.name},
-			Change:  fmt.Sprintf("on-demand · %s", plural(group.nodes, "node")),
-		})
+	item, target, ok := spotItem(current, share)
+	if ok {
+		items = append(items, item)
+	} else {
+		for _, group := range onDemandGroups(current.report) {
+			items = append(items, Item{
+				Subject: costmodel.Subject{Kind: costmodel.SubjectNodeGroup, Name: group.name},
+				Change:  fmt.Sprintf("on-demand · %s", plural(group.nodes, "node")),
+			})
+		}
 	}
+	target.SpotShare = next.spotShare
 	return &Recommendation{
 		ID:         "spot-capacity",
 		Category:   CategoryNodes,
@@ -543,7 +699,187 @@ func stepSpot(current scenario) (*Recommendation, scenario) {
 			share*100, ratio*100),
 		Action: "Add a spot node group with several instance types, steer stateless workloads to it with a node affinity or a taint and toleration, and keep StatefulSets and critical services on on-demand.",
 		Items:  items,
+		Target: &target,
 	}, next
+}
+
+// spotItem gives the commands that move the stateless share of the one
+// on-demand EKS node group to a new spot group: create the spot group with
+// several instance types of the same size, prefer spot for Deployments and
+// CronJobs, keep StatefulSets off it, then shrink the on-demand group. Groups
+// eksctl created get eksctl commands, so the new group has its own stack,
+// role and launch template instead of borrowing ones that eksctl deletes with
+// the old group.
+func spotItem(current scenario, share float64) (Item, Target, bool) {
+	eks := current.inputs.EKS
+	groups := onDemandGroups(current.report)
+	if eks == nil || len(groups) != 1 {
+		return Item{}, Target{}, false
+	}
+	old := eksGroup(current.inputs, groups[0].name)
+	if old == nil || len(old.InstanceTypes) != 1 || old.Desired < 2 {
+		return Item{}, Target{}, false
+	}
+	spotNodes := int(math.Round(share * float64(old.Desired)))
+	// StatefulSets need somewhere to stay: keep one on-demand node at least.
+	spotNodes = min(max(spotNodes, 1), old.Desired-1)
+	onDemand := old.Desired - spotNodes
+
+	types := spotTypes(old.InstanceTypes[0], current.inputs.MachineTypes)
+	name := old.Name + "-spot"
+	byEksctl := old.Labels["alpha.eksctl.io/nodegroup-name"] != ""
+	var steps []string
+	notes := []string{}
+	if byEksctl {
+		if len(old.Taints) > 0 {
+			// eksctl takes no taints on the command line
+			return Item{}, Target{}, false
+		}
+		create := []string{"eksctl create nodegroup", "--cluster " + eks.Name, "--region " + eks.Region, "--name " + name,
+			"--managed --spot", "--instance-types " + strings.Join(types, ","),
+			fmt.Sprintf("--nodes %d --nodes-min 0 --nodes-max %d", spotNodes, 2*spotNodes)}
+		if family := eksctlAMIFamily(old.AmiType); family != "" {
+			create = append(create, "--node-ami-family "+family)
+		}
+		if labels := copiedLabels(old.Labels); labels != "" {
+			create = append(create, "--node-labels "+labels)
+		}
+		steps = append(steps, strings.Join(create, " "))
+		notes = append(notes, "eksctl gives the new group its own stack and waits until it is ready. It defaults to an 80 GB root volume; add --node-volume-size to match the old group.")
+	} else {
+		if old.NodeRole == "" || len(old.Subnets) == 0 {
+			return Item{}, Target{}, false
+		}
+		create := []string{"aws eks create-nodegroup", "--cluster-name " + eks.Name, "--nodegroup-name " + name,
+			"--capacity-type SPOT", "--instance-types " + strings.Join(types, " "),
+			fmt.Sprintf("--scaling-config minSize=0,maxSize=%d,desiredSize=%d", 2*spotNodes, spotNodes),
+			"--subnets " + strings.Join(old.Subnets, " "), "--node-role " + old.NodeRole}
+		if old.AmiType != "" && old.AmiType != "CUSTOM" {
+			create = append(create, "--ami-type "+old.AmiType)
+		}
+		if labels := copiedLabels(old.Labels); labels != "" {
+			create = append(create, "--labels "+labels)
+		}
+		if len(old.Taints) > 0 {
+			create = append(create, "--taints "+strings.Join(old.Taints, " "))
+		}
+		create = append(create, "--region "+eks.Region)
+		steps = append(steps, strings.Join(create, " "),
+			fmt.Sprintf("aws eks wait nodegroup-active --cluster-name %s --nodegroup-name %s --region %s", eks.Name, name, eks.Region))
+		notes = append(notes, "The spot group uses the default root volume, not the old group's launch template.")
+	}
+
+	patches := steeringPatches(current.report)
+	steps = append(steps, patches...)
+	if byEksctl {
+		scale := fmt.Sprintf("eksctl scale nodegroup --cluster %s --region %s --name %s --nodes %d", eks.Name, eks.Region, old.Name, onDemand)
+		if onDemand < old.Min {
+			scale += fmt.Sprintf(" --nodes-min %d", onDemand)
+		}
+		steps = append(steps, scale)
+	} else {
+		scaling := fmt.Sprintf("desiredSize=%d", onDemand)
+		if onDemand < old.Min {
+			scaling = fmt.Sprintf("minSize=%d,desiredSize=%d", onDemand, onDemand)
+		}
+		steps = append(steps, fmt.Sprintf("aws eks update-nodegroup-config --cluster-name %s --nodegroup-name %s --scaling-config %s --region %s", eks.Name, old.Name, scaling, eks.Region))
+	}
+
+	if len(types) == 1 {
+		notes = append(notes, fmt.Sprintf("Only %s has this size in the price catalog: add more types of the same size, since a spot group with one type is often left without capacity.", types[0]))
+	}
+	if len(patches) > 0 {
+		notes = append(notes, "The patches replace a workload's existing node affinity of the same kind and restart its pods; merge them by hand if it has one. Deployments and CronJobs prefer spot; StatefulSets are kept off it.")
+	}
+	notes = append(notes, "Shrinking the on-demand group last lets EKS drain those nodes once spot capacity is there.")
+
+	item := Item{
+		Subject: costmodel.Subject{Kind: costmodel.SubjectNodeGroup, Name: old.Name},
+		Change:  fmt.Sprintf("%d on-demand → %d on-demand + %d spot", old.Desired, onDemand, spotNodes),
+		Check:   "kubectl get nodes -L eks.amazonaws.com/nodegroup,eks.amazonaws.com/capacityType",
+		Steps:   steps,
+		Note:    strings.Join(notes, " "),
+	}
+	return item, Target{Group: old.Name, NewGroup: name, Nodes: onDemand, SpotNodes: spotNodes}, true
+}
+
+// spotTypes are the instance type and up to three priced ones of the same
+// size, cheapest first, so spot can fall back when one type runs out.
+func spotTypes(base string, machineTypes []MachineType) []string {
+	var reference *MachineType
+	for index := range machineTypes {
+		if machineTypes[index].Name == base {
+			reference = &machineTypes[index]
+		}
+	}
+	types := []string{base}
+	if reference == nil {
+		return types
+	}
+	similar := make([]MachineType, 0)
+	for _, candidate := range machineTypes {
+		if candidate.Name != base && !candidate.Burstable && candidate.VCPU == reference.VCPU && candidate.MemoryGB == reference.MemoryGB && candidate.GPUUnits == reference.GPUUnits {
+			similar = append(similar, candidate)
+		}
+	}
+	sort.Slice(similar, func(i, j int) bool {
+		if similar[i].HourlyUSD != similar[j].HourlyUSD {
+			return similar[i].HourlyUSD < similar[j].HourlyUSD
+		}
+		return similar[i].Name < similar[j].Name
+	})
+	for index := 0; index < len(similar) && index < 3; index++ {
+		types = append(types, similar[index].Name)
+	}
+	return types
+}
+
+// steeringPatches send the stateless workloads to spot and keep the stateful
+// ones off it. Managed node groups label every node with its capacity type.
+func steeringPatches(report costmodel.CostReport) []string {
+	const (
+		preferSpot = `"affinity":{"nodeAffinity":{"preferredDuringSchedulingIgnoredDuringExecution":[{"weight":100,"preference":{"matchExpressions":[{"key":"eks.amazonaws.com/capacityType","operator":"In","values":["SPOT"]}]}}]}}`
+		avoidSpot  = `"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"eks.amazonaws.com/capacityType","operator":"NotIn","values":["SPOT"]}]}]}}}`
+	)
+	type patch struct{ kind, namespace, name, body string }
+	patches := make([]patch, 0)
+	for _, item := range report.Items {
+		if item.Basis != costmodel.BasisRequested || IsSystemNamespace(item.Subject.Namespace) {
+			continue
+		}
+		switch detailString(item, "kind") {
+		case "Deployment":
+			patches = append(patches, patch{"deployment", item.Subject.Namespace, item.Subject.Name, `{"spec":{"template":{"spec":{` + preferSpot + `}}}}`})
+		case "CronJob":
+			patches = append(patches, patch{"cronjob", item.Subject.Namespace, item.Subject.Name, `{"spec":{"jobTemplate":{"spec":{"template":{"spec":{` + preferSpot + `}}}}}}`})
+		case "StatefulSet":
+			patches = append(patches, patch{"statefulset", item.Subject.Namespace, item.Subject.Name, `{"spec":{"template":{"spec":{` + avoidSpot + `}}}}`})
+		}
+	}
+	sort.Slice(patches, func(i, j int) bool {
+		if patches[i].kind != patches[j].kind {
+			return patches[i].kind < patches[j].kind
+		}
+		return patches[i].namespace+"/"+patches[i].name < patches[j].namespace+"/"+patches[j].name
+	})
+	commands := make([]string, 0, len(patches))
+	for _, patch := range patches {
+		commands = append(commands, fmt.Sprintf("kubectl patch %s %s -n %s --type merge -p '%s'", patch.kind, patch.name, patch.namespace, patch.body))
+	}
+	return commands
+}
+
+// eksctlAMIFamily maps an EKS AMI type to the family eksctl takes.
+func eksctlAMIFamily(amiType string) string {
+	switch {
+	case strings.HasPrefix(amiType, "AL2023_"):
+		return "AmazonLinux2023"
+	case strings.HasPrefix(amiType, "AL2_"):
+		return "AmazonLinux2"
+	case strings.HasPrefix(amiType, "BOTTLEROCKET_"):
+		return "Bottlerocket"
+	}
+	return ""
 }
 
 // rightsize returns the suggested request and the hourly cost it would free

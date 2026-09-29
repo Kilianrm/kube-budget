@@ -185,6 +185,9 @@ func TestOrphanVolumesAreBoundClaimsNobodyMounts(t *testing.T) {
 	if orphans.Items[0].Command != "kubectl delete pvc unused -n prod" {
 		t.Errorf("command = %q", orphans.Items[0].Command)
 	}
+	if orphans.Items[0].Check != "kubectl describe pvc unused -n prod" {
+		t.Errorf("check = %q", orphans.Items[0].Check)
+	}
 }
 
 func TestNodeTypeMatchesTheRequestRatioAndSkipsBurstables(t *testing.T) {
@@ -348,5 +351,91 @@ func TestDaemonSetsReduceEveryNodesRoom(t *testing.T) {
 	}
 	if with != nil {
 		t.Errorf("with the DaemonSet = %+v, want no node removed", with)
+	}
+}
+
+func TestConsolidationOnEKSGivesTheNodeGroupCommand(t *testing.T) {
+	items := append(nodes(3, 0.1), workload("api", "Deployment", 1, 2, nil))
+	eks := func(desired, min int) Inputs {
+		return Inputs{EKS: &EKSCluster{Name: "shop", Region: "us-east-1", NodeGroups: []EKSNodeGroup{{Name: "general", Desired: desired, Min: min}}}}
+	}
+
+	consolidate := find(Build(reportOf(items...), eks(3, 2)), "consolidate-nodes")
+	if consolidate == nil {
+		t.Fatal("consolidate-nodes missing")
+	}
+	item := consolidate.Items[0]
+	if item.Subject.Name != "general" || item.Change != "3 → 2 nodes" || item.Check != "kubectl get nodes -L eks.amazonaws.com/nodegroup" ||
+		item.Command != "aws eks update-nodegroup-config --cluster-name shop --nodegroup-name general --scaling-config desiredSize=2 --region us-east-1" {
+		t.Errorf("item = %+v, want the general group scaled to 2", item)
+	}
+
+	// a minimum above the new size has to come down with it
+	item = find(Build(reportOf(items...), eks(3, 3)), "consolidate-nodes").Items[0]
+	if !strings.Contains(item.Command, "--scaling-config minSize=2,desiredSize=2 ") {
+		t.Errorf("command = %q, want the minimum lowered too", item.Command)
+	}
+
+	// without EKS details, only the summary
+	item = find(Build(reportOf(items...), Inputs{}), "consolidate-nodes").Items[0]
+	if item.Command != "" || item.Subject.Name != "worker nodes" {
+		t.Errorf("item = %+v, want no command outside EKS", item)
+	}
+}
+
+func TestConsolidationGivesNoCommandWhenOneGroupCannotAbsorbTheCut(t *testing.T) {
+	// two groups of two nodes, and the plan removes two: that empties a group
+	items := nodes(4, 0.1)
+	items[2].Subject.ParentID, items[3].Subject.ParentID = "extra", "extra"
+	inputs := Inputs{EKS: &EKSCluster{Name: "shop", Region: "us-east-1", NodeGroups: []EKSNodeGroup{{Name: "general", Desired: 2, Min: 1}, {Name: "extra", Desired: 2, Min: 1}}}}
+
+	consolidate := find(Build(reportOf(append(items, workload("api", "Deployment", 1, 2, nil))...), inputs), "consolidate-nodes")
+	if consolidate == nil || consolidate.Items[0].Change != "4 → 2 nodes" {
+		t.Fatalf("consolidate = %+v, want 2 of 4 nodes removed", consolidate)
+	}
+	if consolidate.Items[0].Command != "" {
+		t.Errorf("command = %q, want none when the cut spans groups", consolidate.Items[0].Command)
+	}
+}
+
+func TestNodeTypeOnEKSReplacesTheNodeGroup(t *testing.T) {
+	items := append(nodes(4, 0.096), workload("api", "Deployment", 6, 6, nil))
+	general := EKSNodeGroup{
+		Name: "general", Desired: 4, Min: 2, Max: 4, InstanceTypes: []string{"m"}, CapacityType: "ON_DEMAND",
+		AmiType: "AL2023_x86_64_STANDARD", NodeRole: "arn:aws:iam::1:role/nodes", Subnets: []string{"subnet-a", "subnet-b"},
+		Labels:           map[string]string{"workload-tier": "general", "alpha.eksctl.io/nodegroup-name": "general"},
+		Taints:           []string{"key=dedicated,value=web,effect=NO_SCHEDULE"},
+		LaunchTemplateID: "lt-1", LaunchTemplateVersion: "3",
+	}
+	inputs := Inputs{
+		MachineTypes: []MachineType{{Name: "m", VCPU: 2, MemoryGB: 8, HourlyUSD: 0.096}, {Name: "c", VCPU: 2, MemoryGB: 4, HourlyUSD: 0.085}},
+		EKS:          &EKSCluster{Name: "shop", Region: "us-east-1", NodeGroups: []EKSNodeGroup{general}},
+	}
+
+	item := find(Build(reportOf(items...), inputs), "node-type").Items[0]
+	want := []string{
+		"aws eks create-nodegroup --cluster-name shop --nodegroup-name general-c --instance-types c --capacity-type ON_DEMAND" +
+			" --scaling-config minSize=2,maxSize=4,desiredSize=4 --subnets subnet-a subnet-b --node-role arn:aws:iam::1:role/nodes" +
+			" --launch-template id=lt-1,version=3 --ami-type AL2023_x86_64_STANDARD --labels workload-tier=general" +
+			" --taints key=dedicated,value=web,effect=NO_SCHEDULE --region us-east-1",
+		"aws eks wait nodegroup-active --cluster-name shop --nodegroup-name general-c --region us-east-1",
+		"kubectl cordon -l eks.amazonaws.com/nodegroup=general",
+		"kubectl drain -l eks.amazonaws.com/nodegroup=general --ignore-daemonsets --delete-emptydir-data",
+		"aws eks delete-nodegroup --cluster-name shop --nodegroup-name general --region us-east-1",
+	}
+	if item.Subject.Name != "general" || strings.Join(item.Steps, "\n") != strings.Join(want, "\n") {
+		t.Errorf("steps =\n%s\nwant\n%s", strings.Join(item.Steps, "\n"), strings.Join(want, "\n"))
+	}
+
+	// a custom AMI lives in the launch template: no AMI type may be given
+	inputs.EKS.NodeGroups[0].AmiType = "CUSTOM"
+	if item := find(Build(reportOf(items...), inputs), "node-type").Items[0]; strings.Contains(item.Steps[0], "--ami-type") {
+		t.Errorf("create = %q, want no AMI type with a custom AMI", item.Steps[0])
+	}
+
+	// a group running several types is not a plain swap
+	inputs.EKS.NodeGroups[0].InstanceTypes = []string{"m", "r"}
+	if item := find(Build(reportOf(items...), inputs), "node-type").Items[0]; len(item.Steps) != 0 || item.Subject.Name != "worker nodes" {
+		t.Errorf("item = %+v, want no commands for a mixed group", item)
 	}
 }
