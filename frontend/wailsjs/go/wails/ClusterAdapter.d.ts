@@ -3,6 +3,8 @@
 import {wails} from '../models';
 import {cluster} from '../models';
 
+export function ClaimRecommendation(arg1:wails.RecommendationRequest):Promise<wails.OptimizationResult>;
+
 export function DismissRecommendation(arg1:wails.RecommendationRequest):Promise<wails.OptimizationResult>;
 
 export function GetClusterSnapshot(arg1:wails.ClusterSnapshotRequest):Promise<cluster.Snapshot>;

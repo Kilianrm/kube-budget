@@ -826,11 +826,21 @@ h3 { margin: 0; letter-spacing: 0; }
 .chip.effort-low, .chip.risk-low { border-color: #cde9dc; color: #2b8b66; background: #f0faf5; }
 .chip.effort-high, .chip.risk-high, .chip.risk-medium { border-color: #f0d9c2; color: #a06428; background: #fff7ed; }
 .chip.applied { border-color: #c7dcef; color: #2563a8; background: #eef5fc; }
+.milestones { display: grid; gap: 5px; margin: 0; padding: 10px 12px; border: 1px solid #e3ebf0; border-radius: 6px; background: #fafcfd; list-style: none; }
+.milestones li { display: flex; align-items: center; gap: 7px; color: #627586; font-size: 12px; }
+.milestones li svg { flex: none; color: #b3c1ca; }
+.milestones li.done { color: #294457; }
+.milestones li.done svg { color: var(--green-dark); }
+.paused-note { margin: 0 0 12px; border-color: #c7dcef; color: #2563a8; background: #eef5fc; }
 .recommendation-saving { display: grid; justify-items: end; gap: 3px; text-align: right; white-space: nowrap; }
 .recommendation-saving strong { color: #23805b; font-family: "IBM Plex Mono", monospace; font-size: 15px; }
 .recommendation-saving small { color: #8a9aa5; font-size: 10px; }
 .item-table td { vertical-align: top; white-space: normal; }
 .item-note { display: block; margin-top: 4px; color: #8a9aa5; font-size: 10px; line-height: 1.4; }
+.command-cell .command-line + .command-line { margin-top: 4px; }
+.command-steps { display: grid; gap: 4px; margin: 4px 0 0; padding-left: 18px; color: #788b98; font-size: 11px; }
+.command-steps li { padding-left: 2px; }
+.command-steps li::marker { font-family: "IBM Plex Mono", monospace; }
 .command-line { display: flex; align-items: flex-start; gap: 6px; max-width: 520px; }
 .command-line code { flex: 1; padding: 5px 8px; overflow-x: auto; border-radius: 4px; color: #e8eef2; background: #1c2b36; font-family: "IBM Plex Mono", monospace; font-size: 11px; white-space: nowrap; }
 .command-line button { display: grid; place-items: center; padding: 5px; border: 1px solid #dce6ec; border-radius: 4px; color: #627586; background: #fff; cursor: pointer; }
@@ -902,5 +912,30 @@ h3 { margin: 0; letter-spacing: 0; }
 .recommendation-tabs h2 { margin: 0; color: #1c3549; font-size: 16px; }
 .chip.history-applied { border-color: #c7dcef; color: #2563a8; background: #eef5fc; }
 .chip.history-confirmed { border-color: #bfe0cf; color: var(--green-dark); background: var(--green-soft); }
-.waterfall-pending { color: #2563a8; font-style: normal; font-size: 11px; }
+.expandable-row { cursor: pointer; }
+.expandable-row:hover td { background: #f6f9fb; }
+.row-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.row-toggle svg { flex: none; color: #788b98; }
+.expanded-row > td { padding: 12px 16px 16px 34px; background: #fafcfd; }
+.confirmed-details { display: grid; gap: 10px; }
+.confirmed-details p { margin: 0; color: #627586; font-size: 12px; line-height: 1.5; white-space: normal; }
+.confirmed-details .recommendation-action b { color: #294457; font-weight: 600; }
+.item-table td:nth-child(2) { min-width: 170px; }
+.item-table .done-row td { background: #fafcfd; color: #788b98; }
+.item-table .done-row strong { color: #627586; }
+.item-table .done-row .chip { margin-left: 6px; vertical-align: middle; }
+.item-table .done-row .command-line code { opacity: .65; }
+.waterfall-tag { color: #2563a8; font-style: normal; font-size: 11px; }
+.waterfall-tag.change { color: #9a6700; }
+.waterfall-achieved { display: block; color: var(--green-dark); font-size: 10px; }
+.waterfall-row.paused { color: #9aa9b3; }
+.waterfall-row.paused strong { color: #9aa9b3; }
+.waterfall-row.paused .waterfall-tag { color: #9aa9b3; }
+.waterfall-row.paused .waterfall-track i { background: repeating-linear-gradient(135deg, #cfd9df 0 4px, #e6edf1 4px 8px); }
+.waterfall-note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-left: 2px; color: #788b98; font-size: 11px; line-height: 1.5; }
+.waterfall-note svg { flex: none; }
+.waterfall-note.achieved { color: var(--green-dark); }
+.recommendation-card.paused { background: #fafbfc; }
+.outside-chip { margin-left: 6px; }
+.recommendation-card.paused h3 { color: #627586; }
 .cluster-locked-content .locked-hint { font-size: 12px; color: #8a9aa5; }

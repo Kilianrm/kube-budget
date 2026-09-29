@@ -2,6 +2,7 @@ import { EstimateManifest } from "../wailsjs/go/wails/ManifestAdapter";
 import {
   GetClusterSnapshot,
 	GetWorkloadYAML,
+  ClaimRecommendation,
   DismissRecommendation,
   GetCostForecast,
   GetCostReport,
@@ -44,6 +45,7 @@ export type OptimizationRecommendation = optimize.Recommendation;
 export type OptimizationItem = optimize.Item;
 export type AppliedRecommendation = wails.AppliedRecommendation;
 export type RecommendationEvent = wails.RecommendationEvent;
+export type DoneResource = wails.DoneResource;
 export type CostTrend = wails.CostTrendResult;
 export type CostSeries = costseries.Series;
 export type CostDriver = costseries.Driver;
@@ -195,6 +197,7 @@ export const dismissRecommendation = recommendationAction(DismissRecommendation)
 export const restoreRecommendation = recommendationAction(RestoreRecommendation);
 export const reopenRecommendation = recommendationAction(ReopenRecommendation);
 export const markRecommendationApplied = recommendationAction(MarkRecommendationApplied);
+export const claimRecommendation = recommendationAction(ClaimRecommendation);
 
 /** Prices a manifest at a connected cluster's rates and simulates deploying it. */
 export async function simulateManifest(clusterId: string, document: { name: string; content: string }): Promise<SimulationResult> {

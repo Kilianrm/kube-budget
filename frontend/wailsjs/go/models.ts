@@ -138,6 +138,8 @@ export namespace cluster {
 	    allocatable: ResourceValues;
 	    requests: ResourceValues;
 	    taints?: string[];
+	    nodeGroup?: string;
+	    capacityType?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Node(source);
@@ -158,6 +160,8 @@ export namespace cluster {
 	        this.allocatable = this.convertValues(source["allocatable"], ResourceValues);
 	        this.requests = this.convertValues(source["requests"], ResourceValues);
 	        this.taints = source["taints"];
+	        this.nodeGroup = source["nodeGroup"];
+	        this.capacityType = source["capacityType"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -178,6 +182,22 @@ export namespace cluster {
 		    return a;
 		}
 	}
+	export class NodeGroupTaint {
+	    key: string;
+	    value?: string;
+	    effect: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NodeGroupTaint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.value = source["value"];
+	        this.effect = source["effect"];
+	    }
+	}
 	export class NodeGroup {
 	    name: string;
 	    status: string;
@@ -188,6 +208,11 @@ export namespace cluster {
 	    maxSize: number;
 	    amiType: string;
 	    nodeRole: string;
+	    subnets?: string[];
+	    labels?: Record<string, string>;
+	    taints?: NodeGroupTaint[];
+	    launchTemplateId?: string;
+	    launchTemplateVersion?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new NodeGroup(source);
@@ -204,8 +229,32 @@ export namespace cluster {
 	        this.maxSize = source["maxSize"];
 	        this.amiType = source["amiType"];
 	        this.nodeRole = source["nodeRole"];
+	        this.subnets = source["subnets"];
+	        this.labels = source["labels"];
+	        this.taints = this.convertValues(source["taints"], NodeGroupTaint);
+	        this.launchTemplateId = source["launchTemplateId"];
+	        this.launchTemplateVersion = source["launchTemplateVersion"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
+	
 	export class Platform {
 	    provider: string;
 	    detected: string;
@@ -1168,7 +1217,10 @@ export namespace optimize {
 	    subject: costmodel.Subject;
 	    change: string;
 	    savings: costmodel.Projection;
+	    check?: string;
 	    command?: string;
+	    steps?: string[];
+	    done?: boolean;
 	    note?: string;
 	
 	    static createFrom(source: any = {}) {
@@ -1180,7 +1232,10 @@ export namespace optimize {
 	        this.subject = this.convertValues(source["subject"], costmodel.Subject);
 	        this.change = source["change"];
 	        this.savings = this.convertValues(source["savings"], costmodel.Projection);
+	        this.check = source["check"];
 	        this.command = source["command"];
+	        this.steps = source["steps"];
+	        this.done = source["done"];
 	        this.note = source["note"];
 	    }
 	
@@ -1202,6 +1257,76 @@ export namespace optimize {
 		    return a;
 		}
 	}
+	export class Milestone {
+	    label: string;
+	    done: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Milestone(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.done = source["done"];
+	    }
+	}
+	export class Temporary {
+	    label: string;
+	    cost: costmodel.Projection;
+	
+	    static createFrom(source: any = {}) {
+	        return new Temporary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.cost = this.convertValues(source["cost"], costmodel.Projection);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Target {
+	    group?: string;
+	    newGroup?: string;
+	    nodes?: number;
+	    fromMachineType?: string;
+	    machineType?: string;
+	    spotShare?: number;
+	    spotNodes?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Target(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.group = source["group"];
+	        this.newGroup = source["newGroup"];
+	        this.nodes = source["nodes"];
+	        this.fromMachineType = source["fromMachineType"];
+	        this.machineType = source["machineType"];
+	        this.spotShare = source["spotShare"];
+	        this.spotNodes = source["spotNodes"];
+	    }
+	}
 	export class Recommendation {
 	    id: string;
 	    category: string;
@@ -1214,7 +1339,13 @@ export namespace optimize {
 	    rationale: string;
 	    action: string;
 	    dismissed: boolean;
+	    separateItems?: boolean;
 	    items?: Item[];
+	    target?: Target;
+	    applying?: boolean;
+	    paused?: boolean;
+	    milestones?: Milestone[];
+	    complete?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Recommendation(source);
@@ -1233,7 +1364,13 @@ export namespace optimize {
 	        this.rationale = source["rationale"];
 	        this.action = source["action"];
 	        this.dismissed = source["dismissed"];
+	        this.separateItems = source["separateItems"];
 	        this.items = this.convertValues(source["items"], Item);
+	        this.target = this.convertValues(source["target"], Target);
+	        this.applying = source["applying"];
+	        this.paused = source["paused"];
+	        this.milestones = this.convertValues(source["milestones"], Milestone);
+	        this.complete = source["complete"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1258,6 +1395,11 @@ export namespace optimize {
 	    id: string;
 	    title: string;
 	    savings: costmodel.Projection;
+	    status?: string;
+	    achieved: costmodel.Projection;
+	    note?: string;
+	    change?: string;
+	    previous: costmodel.Projection;
 	
 	    static createFrom(source: any = {}) {
 	        return new Step(source);
@@ -1268,6 +1410,11 @@ export namespace optimize {
 	        this.id = source["id"];
 	        this.title = source["title"];
 	        this.savings = this.convertValues(source["savings"], costmodel.Projection);
+	        this.status = source["status"];
+	        this.achieved = this.convertValues(source["achieved"], costmodel.Projection);
+	        this.note = source["note"];
+	        this.change = source["change"];
+	        this.previous = this.convertValues(source["previous"], costmodel.Projection);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1296,6 +1443,9 @@ export namespace optimize {
 	    dataIssues: Recommendation[];
 	    recommendations: Recommendation[];
 	    assumptions: costmodel.Assumption[];
+	    paused?: string;
+	    temporary?: Temporary[];
+	    gone?: Step[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Plan(source);
@@ -1310,6 +1460,9 @@ export namespace optimize {
 	        this.dataIssues = this.convertValues(source["dataIssues"], Recommendation);
 	        this.recommendations = this.convertValues(source["recommendations"], Recommendation);
 	        this.assumptions = this.convertValues(source["assumptions"], costmodel.Assumption);
+	        this.paused = source["paused"];
+	        this.temporary = this.convertValues(source["temporary"], Temporary);
+	        this.gone = this.convertValues(source["gone"], Step);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1331,11 +1484,52 @@ export namespace optimize {
 		}
 	}
 	
+	
+	
 
 }
 
 export namespace wails {
 	
+	export class DoneResource {
+	    name: string;
+	    namespace?: string;
+	    // Go type: time
+	    at: any;
+	    savings: costmodel.Projection;
+	    item?: optimize.Item;
+	
+	    static createFrom(source: any = {}) {
+	        return new DoneResource(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.namespace = source["namespace"];
+	        this.at = this.convertValues(source["at"], null);
+	        this.savings = this.convertValues(source["savings"], costmodel.Projection);
+	        this.item = this.convertValues(source["item"], optimize.Item);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AppliedRecommendation {
 	    id: string;
 	    title: string;
@@ -1344,7 +1538,10 @@ export namespace wails {
 	    pending: boolean;
 	    // Go type: time
 	    confirmedAt?: any;
+	    unmarked?: boolean;
 	    expected: costmodel.Projection;
+	    details?: optimize.Recommendation;
+	    done?: DoneResource[];
 	    realized: costmodel.Projection;
 	
 	    static createFrom(source: any = {}) {
@@ -1358,7 +1555,10 @@ export namespace wails {
 	        this.at = this.convertValues(source["at"], null);
 	        this.pending = source["pending"];
 	        this.confirmedAt = this.convertValues(source["confirmedAt"], null);
+	        this.unmarked = source["unmarked"];
 	        this.expected = this.convertValues(source["expected"], costmodel.Projection);
+	        this.details = this.convertValues(source["details"], optimize.Recommendation);
+	        this.done = this.convertValues(source["done"], DoneResource);
 	        this.realized = this.convertValues(source["realized"], costmodel.Projection);
 	    }
 	
@@ -1573,6 +1773,8 @@ export namespace wails {
 	    plan: optimize.Plan;
 	    applied: AppliedRecommendation[];
 	    history: RecommendationEvent[];
+	    progress: Record<string, Array<DoneResource>>;
+	    claimable: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new OptimizationResult(source);
@@ -1583,6 +1785,8 @@ export namespace wails {
 	        this.plan = this.convertValues(source["plan"], optimize.Plan);
 	        this.applied = this.convertValues(source["applied"], AppliedRecommendation);
 	        this.history = this.convertValues(source["history"], RecommendationEvent);
+	        this.progress = this.convertValues(source["progress"], Array<DoneResource>, true);
+	        this.claimable = source["claimable"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1687,6 +1891,7 @@ export namespace wails {
 		    return a;
 		}
 	}
+	
 	export class EKSClustersRequest {
 	    region: string;
 	    profile: string;
