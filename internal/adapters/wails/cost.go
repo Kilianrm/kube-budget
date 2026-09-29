@@ -123,6 +123,8 @@ func (adapter *ClusterAdapter) GetCostReport(request CostReportRequest) (CostRep
 
 	clusterID := costhistory.ClusterID(report.Scope)
 	inputs := planInputs(selectedProvider, report.Scope.Region)
+	inputs.EKS = eksCluster(snapshot.Provider)
+	inputs.NodeTransition = nodeTransition(snapshot.Provider)
 	adapter.rememberCost(clusterID, report, inputs)
 
 	result := CostReportResult{Report: report, ClusterID: clusterID}
