@@ -162,6 +162,20 @@ func (client *EKSClient) addons(ctx context.Context, clusterName string) []clust
 
 func nodeGroup(group *ekstypes.Nodegroup) clustermode.NodeGroup {
 	result := clustermode.NodeGroup{Name: aws.ToString(group.NodegroupName), Status: string(group.Status), InstanceTypes: append([]string{}, group.InstanceTypes...), CapacityType: string(group.CapacityType), AmiType: string(group.AmiType), NodeRole: aws.ToString(group.NodeRole)}
+	result.Subnets = append([]string{}, group.Subnets...)
+	if len(group.Labels) > 0 {
+		result.Labels = make(map[string]string, len(group.Labels))
+		for key, value := range group.Labels {
+			result.Labels[key] = value
+		}
+	}
+	for _, taint := range group.Taints {
+		result.Taints = append(result.Taints, clustermode.NodeGroupTaint{Key: aws.ToString(taint.Key), Value: aws.ToString(taint.Value), Effect: string(taint.Effect)})
+	}
+	if template := group.LaunchTemplate; template != nil {
+		result.LaunchTemplateID = aws.ToString(template.Id)
+		result.LaunchTemplateVersion = aws.ToString(template.Version)
+	}
 	if group.ScalingConfig != nil {
 		result.DesiredSize = int32Value(group.ScalingConfig.DesiredSize)
 		result.MinSize = int32Value(group.ScalingConfig.MinSize)

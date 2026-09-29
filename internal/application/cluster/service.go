@@ -88,6 +88,10 @@ type Node struct {
 	Requests     ResourceValues `json:"requests"`
 	// Taints lists the NoSchedule and NoExecute taints as key=value:Effect.
 	Taints []string `json:"taints,omitempty"`
+	// NodeGroup and CapacityType come from the node's EKS labels, so a
+	// connection without the EKS API still knows the group and purchase.
+	NodeGroup    string `json:"nodeGroup,omitempty"`
+	CapacityType string `json:"capacityType,omitempty"`
 }
 
 type NamespaceSummary struct {
@@ -143,6 +147,19 @@ type NodeGroup struct {
 	MaxSize       int32    `json:"maxSize"`
 	AmiType       string   `json:"amiType"`
 	NodeRole      string   `json:"nodeRole"`
+	// What a replacement group needs to match this one.
+	Subnets               []string          `json:"subnets,omitempty"`
+	Labels                map[string]string `json:"labels,omitempty"`
+	Taints                []NodeGroupTaint  `json:"taints,omitempty"`
+	LaunchTemplateID      string            `json:"launchTemplateId,omitempty"`
+	LaunchTemplateVersion string            `json:"launchTemplateVersion,omitempty"`
+}
+
+// NodeGroupTaint is a node group taint as the EKS API spells it.
+type NodeGroupTaint struct {
+	Key    string `json:"key"`
+	Value  string `json:"value,omitempty"`
+	Effect string `json:"effect"`
 }
 
 type Addon struct {

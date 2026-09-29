@@ -110,7 +110,7 @@ func projectNodes(snapshot clustermode.Snapshot, defaultRegion string) []allocat
 		if region == "" {
 			region = defaultRegion
 		}
-		group, purchase := nodeGroupFor(snapshot.Provider, node.InstanceType)
+		group, purchase := nodeGroupFor(snapshot.Provider, node)
 		nodes = append(nodes, allocation.Node{
 			ID:          node.UID,
 			Name:        node.Name,
@@ -127,20 +127,32 @@ func projectNodes(snapshot clustermode.Snapshot, defaultRegion string) []allocat
 	return nodes
 }
 
-// nodeGroupFor matches a node to its node group by instance type, the only
-// link the snapshot exposes today.
-func nodeGroupFor(provider *clustermode.ProviderMetadata, instanceType string) (string, pricing.PurchaseOption) {
-	if provider == nil || instanceType == "" {
-		return "", pricing.PurchaseOnDemand
+// nodeGroupFor finds a node's group and purchase option. The node's own EKS
+// labels come first; without them, the node is matched to a described node
+// group by instance type, which is ambiguous when two groups share a type.
+func nodeGroupFor(provider *clustermode.ProviderMetadata, node clustermode.Node) (string, pricing.PurchaseOption) {
+	if node.NodeGroup != "" {
+		capacityType := node.CapacityType
+		if provider != nil {
+			for _, group := range provider.NodeGroups {
+				if group.Name == node.NodeGroup && group.CapacityType != "" {
+					capacityType = group.CapacityType
+				}
+			}
+		}
+		return node.NodeGroup, purchaseOption(capacityType)
+	}
+	if provider == nil || node.InstanceType == "" {
+		return "", purchaseOption(node.CapacityType)
 	}
 	for _, group := range provider.NodeGroups {
 		for _, candidate := range group.InstanceTypes {
-			if candidate == instanceType {
+			if candidate == node.InstanceType {
 				return group.Name, purchaseOption(group.CapacityType)
 			}
 		}
 	}
-	return "", pricing.PurchaseOnDemand
+	return "", purchaseOption(node.CapacityType)
 }
 
 func purchaseOption(capacityType string) pricing.PurchaseOption {

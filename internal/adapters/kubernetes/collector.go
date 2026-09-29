@@ -526,6 +526,8 @@ func collectNodes(nodes []corev1.Node, pods []corev1.Pod) []clustermode.Node {
 			Allocatable:  resourceListValues(node.Status.Allocatable),
 			Requests:     requestsByNode[node.Name],
 			Taints:       schedulingTaints(node.Spec.Taints),
+			NodeGroup:    node.Labels["eks.amazonaws.com/nodegroup"],
+			CapacityType: node.Labels["eks.amazonaws.com/capacityType"],
 		})
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Name < result[right].Name })

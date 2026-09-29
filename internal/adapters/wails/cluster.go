@@ -331,20 +331,26 @@ func (adapter *ClusterAdapter) collectSnapshot(request ClusterSnapshotRequest) (
 	defer cancel()
 
 	// The cloud provider's metadata does not depend on the Kubernetes API, so
-	// both are read at the same time.
+	// both are read at the same time. An EKS connection names the cluster; a
+	// kubeconfig context that authenticates with `aws eks get-token` names it
+	// too, with the AWS identity it already uses.
+	target, fromKubeconfig := eksTarget{ClusterName: request.ClusterName, Region: request.Region, Profile: request.Profile, RoleARN: request.RoleARN}, false
+	if !strings.EqualFold(strings.TrimSpace(request.Provider), "aws-eks") {
+		target, fromKubeconfig = kubeconfigEKSTarget(request.KubeconfigPath, request.Context)
+	}
 	var metadata *clustermode.ProviderMetadata
 	var metadataErr error
 	var metadataDone sync.WaitGroup
-	if strings.EqualFold(strings.TrimSpace(request.Provider), "aws-eks") {
+	if target.ClusterName != "" {
 		metadataDone.Add(1)
 		go func() {
 			defer metadataDone.Done()
-			providerClient, err := awsprovider.NewEKSClient(ctx, request.Region, request.Profile, request.RoleARN)
+			providerClient, err := awsprovider.NewEKSClient(ctx, target.Region, target.Profile, target.RoleARN)
 			if err != nil {
 				metadataErr = err
 				return
 			}
-			metadata, metadataErr = providerClient.Metadata(ctx, request.ClusterName, request.Region)
+			metadata, metadataErr = providerClient.Metadata(ctx, target.ClusterName, target.Region)
 		}()
 	}
 
@@ -354,7 +360,11 @@ func (adapter *ClusterAdapter) collectSnapshot(request ClusterSnapshotRequest) (
 		return clustermode.Snapshot{}, fmt.Errorf("cluster snapshot: collect resources: %w", err)
 	}
 	if metadataErr != nil {
-		snapshot.Warnings = append(snapshot.Warnings, clustermode.Warning{Resource: "AWS provider", Message: metadataErr.Error()})
+		message := metadataErr.Error()
+		if fromKubeconfig {
+			message = fmt.Sprintf("read EKS cluster %s with the kubeconfig's AWS identity: %s. Node groups and spot come from node labels instead, and node-count changes have no command.", target.ClusterName, message)
+		}
+		snapshot.Warnings = append(snapshot.Warnings, clustermode.Warning{Resource: "AWS provider", Message: message})
 	} else if metadata != nil {
 		snapshot.Provider = metadata
 	}
@@ -421,6 +431,16 @@ func marshalLiveYAML(object runtime.Object, kind string) (string, error) {
 		return "", fmt.Errorf("workload YAML: encode live object: %w", err)
 	}
 	return string(yamlData), nil
+}
+
+// kubeconfigEKSTarget reads the EKS cluster behind a kubeconfig context, if
+// the context authenticates with `aws eks get-token`.
+func kubeconfigEKSTarget(path, contextName string) (eksTarget, bool) {
+	config, err := loadKubeconfig(path, contextName)
+	if err != nil {
+		return eksTarget{}, false
+	}
+	return eksTargetFor(config, contextName)
 }
 
 func buildClientConfig(path, contextName string) (*rest.Config, error) {

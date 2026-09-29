@@ -301,3 +301,44 @@ func TestReportPricesPartialRequestsAndLeavesOnlyEmptyOnesUnknown(t *testing.T) 
 		t.Error("legacy priced, want an unknown cost when nothing is requested")
 	}
 }
+
+func TestNodeLabelsNameTheGroupWithoutTheEKSAPI(t *testing.T) {
+	// a kubeconfig connection: no provider metadata, only the node labels
+	input := snapshot()
+	input.Provider = nil
+	input.Nodes[0].NodeGroup, input.Nodes[0].CapacityType = "general", "ON_DEMAND"
+	input.Nodes[1].NodeGroup, input.Nodes[1].CapacityType = "batch-spot", "SPOT"
+
+	report, err := New(awsResolver(t)).Report(input, Options{Region: "us-east-1"})
+	if err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	prices := map[string]float64{}
+	for _, item := range report.Items {
+		if item.Subject.Kind == costmodel.SubjectNode {
+			prices[item.Subject.ParentID] = item.HourlyUSD
+		}
+	}
+	if prices["general"] != 0.096 || prices["batch-spot"] <= 0 || prices["batch-spot"] >= 0.096 {
+		t.Errorf("prices by group = %v, want general on demand and batch-spot at the spot rate", prices)
+	}
+}
+
+func TestTheNodeLabelBeatsAnInstanceTypeTwoGroupsShare(t *testing.T) {
+	input := snapshot()
+	input.Provider.NodeGroups = []clustermode.NodeGroup{
+		{Name: "ng-spot", InstanceTypes: []string{"m6i.large"}, CapacityType: "SPOT"},
+		{Name: "general", InstanceTypes: []string{"m6i.large"}, CapacityType: "ON_DEMAND"},
+	}
+	input.Nodes[0].NodeGroup = "general"
+
+	report, err := New(awsResolver(t)).Report(input, Options{})
+	if err != nil {
+		t.Fatalf("Report() error = %v", err)
+	}
+	for _, item := range report.Items {
+		if item.Subject.Kind == costmodel.SubjectNode && item.Subject.Name == "node-1" && (item.Subject.ParentID != "general" || item.HourlyUSD != 0.096) {
+			t.Errorf("node-1 = %s at %v, want the general group on demand", item.Subject.ParentID, item.HourlyUSD)
+		}
+	}
+}
