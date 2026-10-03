@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
-import { ManifestResult } from "./backend";
+import { ManifestResult, SimulationResult } from "./backend";
 
 export interface SavedEstimation {
   id: string;
@@ -14,6 +14,7 @@ export interface SavedEstimation {
   currency: string;
   manifest: string;
   fullResult: ManifestResult;
+  simulation?: SimulationResult;
 }
 
 interface EstimationHistoryContextType {
