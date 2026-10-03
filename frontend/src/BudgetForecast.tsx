@@ -1,9 +1,10 @@
 import { FormEvent, useState } from "react";
-import { AlertCircle, CalendarClock, LoaderCircle, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import { AlertCircle, CalendarClock, Download, LoaderCircle, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { setCostBudget, CostDriver, CostForecast, CostReport } from "./backend";
 import { defaultHistoryWindow, historyWindows, invalidateCostForecasts, useCostForecast, useCostTrend } from "./costHistoryCache";
 import { formatMoney, hoursPerMonth } from "./costFormat";
 import { Segmented } from "./Segmented";
+import { downloadBudgetForecastPdf } from "./costReportsPdf";
 
 const recordedColor = "#2a78d6";
 const increaseColor = "#eb6834";
@@ -54,7 +55,10 @@ export function BudgetForecastView({ report, clusterId }: { report: CostReport; 
       <section className="cluster-panel">
         <div className="cluster-panel-heading">
           <h2>Month to date</h2>
-          <BudgetEditor clusterId={clusterId} current={budget?.monthlyUSD ?? 0} currency={currency} onSaved={() => setReload((value) => value + 1)} />
+          <div className="budget-forecast-actions">
+            <button type="button" className="secondary-button report-download-button" onClick={() => void downloadBudgetForecastPdf(report, forecast)}><Download size={14} /> Download PDF</button>
+            <BudgetEditor clusterId={clusterId} current={budget?.monthlyUSD ?? 0} currency={currency} onSaved={() => setReload((value) => value + 1)} />
+          </div>
         </div>
         {budget && budget.state !== "on-track" && (
           <div className="budget-alert"><AlertCircle size={15} /> {budgetAlert(budget, month.totalUSD, currency)}</div>

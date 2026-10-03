@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertCircle, Check, CheckCircle2, ChevronDown, Circle, ChevronRight, Clock3, Copy, HardDrive, Layers3, RotateCcw, Server, ShieldAlert, Undo2 } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, ChevronDown, Circle, ChevronRight, Clock3, Copy, Download, HardDrive, Layers3, RotateCcw, Server, ShieldAlert, Undo2 } from "lucide-react";
 import {
   claimRecommendation,
   dismissRecommendation,
@@ -17,6 +17,7 @@ import {
 import { formatMoney } from "./costFormat";
 import { useCostForecast } from "./costHistoryCache";
 import { Segmented } from "./Segmented";
+import { downloadOptimizationPdf } from "./costReportsPdf";
 
 const baseColor = "#2a78d6";
 const savingColor = "#1baf7a";
@@ -130,7 +131,7 @@ export function OptimizationsView({ report, clusterId, optimization, onChange }:
       </div>
 
       <section className="cluster-panel">
-        <div className="cluster-panel-heading"><h2>From today's bill to the optimized bill</h2><small>Monthly run rate</small></div>
+        <div className="cluster-panel-heading"><h2>From today's bill to the optimized bill</h2><div className="optimization-report-actions"><small>Monthly run rate</small><button type="button" className="secondary-button report-download-button" onClick={() => void downloadOptimizationPdf(report, optimization, budget ?? undefined)}><Download size={14} /> Download PDF</button></div></div>
         <SavingsWaterfall optimization={optimization} currency={currency} confirmed={confirmed} />
       </section>
 
@@ -401,22 +402,33 @@ function ItemTable({ items, done = [], currency, savingsLabel }: { items: Optimi
   );
 }
 
-function CopyCommand({ command }: { command: string }) {
+export function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(command);
+      if ("runtime" in window && window.runtime) {
+        const { ClipboardSetText } = await import("../wailsjs/runtime/runtime");
+        if (!await ClipboardSetText(command)) throw new Error("Clipboard unavailable");
+      } else {
+        await navigator.clipboard.writeText(command);
+      }
       setCopied(true);
+      setCopyError(false);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       setCopied(false);
+      setCopyError(true);
     }
   };
   return (
+    <>
     <div className="command-line">
       <code>{command}</code>
-      <button type="button" onClick={copy} title="Copy command" aria-label="Copy command">{copied ? <Check size={13} /> : <Copy size={13} />}</button>
+      <button type="button" onClick={copy} title={copied ? "Copied" : "Copy command"} aria-label={copied ? "Copied" : "Copy command"}>{copied ? <Check size={13} /> : <Copy size={13} />}</button>
     </div>
+    {copyError && <p className="command-copy-error" role="alert">Could not copy. Select the command to copy it manually.</p>}
+    </>
   );
 }
 
