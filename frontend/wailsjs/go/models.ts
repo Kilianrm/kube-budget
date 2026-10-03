@@ -2357,6 +2357,12 @@ export namespace whatif {
 	}
 	export class Result {
 	    workload: Workload;
+	    operation: string;
+	    current?: Workload;
+	    currentRequested: costmodel.Projection;
+	    currentCostKnown: boolean;
+	    proposedRequested: costmodel.Projection;
+	    requestedDelta: costmodel.Projection;
 	    fits: boolean;
 	    placements: Placement[];
 	    newNodes: number;
@@ -2381,6 +2387,12 @@ export namespace whatif {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.workload = this.convertValues(source["workload"], Workload);
+	        this.operation = source["operation"];
+	        this.current = this.convertValues(source["current"], Workload);
+	        this.currentRequested = this.convertValues(source["currentRequested"], costmodel.Projection);
+	        this.currentCostKnown = source["currentCostKnown"];
+	        this.proposedRequested = this.convertValues(source["proposedRequested"], costmodel.Projection);
+	        this.requestedDelta = this.convertValues(source["requestedDelta"], costmodel.Projection);
 	        this.fits = source["fits"];
 	        this.placements = this.convertValues(source["placements"], Placement);
 	        this.newNodes = source["newNodes"];

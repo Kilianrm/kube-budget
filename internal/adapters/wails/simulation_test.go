@@ -86,3 +86,41 @@ func TestSimulateManifestUsesTheClusterRatesAndItsLastReport(t *testing.T) {
 		t.Errorf("forecast grew %v, want the billed change over the rest of the month (%v)", grew, expected)
 	}
 }
+
+func TestSimulateManifestComparesAnExistingDeployment(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	adapter := NewClusterAdapter()
+	report := simulationReport(t)
+	provider, _ := providers.Get("aws")
+	adapter.rememberCost("demo", report, planInputs(provider, "us-east-1"))
+	manifest := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: base
+  namespace: prod
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: base
+          resources:
+            requests:
+              cpu: 1500m
+              memory: 5Gi
+`
+	result, err := adapter.SimulateManifest(SimulationRequest{ClusterID: "demo", Document: ManifestDocument{Content: manifest}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	impact := result.Impact
+	if impact.Operation != "update" || impact.Current == nil || !impact.Fits || impact.NewNodes != 0 || impact.BilledDelta.Hourly != 0 {
+		t.Fatalf("impact = %+v, want an unchanged update to fit on its existing nodes", impact)
+	}
+	if impact.Current.Replicas != 2 || impact.Current.PerReplica.CPUCores != 1.5 || impact.Current.PerReplica.MemoryGB != 5 {
+		t.Errorf("current = %+v, want the collected Deployment's requests", impact.Current)
+	}
+	if impact.IdleBefore != impact.IdleAfter {
+		t.Errorf("idle changed for unchanged update: %+v -> %+v", impact.IdleBefore, impact.IdleAfter)
+	}
+}

@@ -21,3 +21,19 @@ Real-world manifests, taken as-is from upstream public releases (unmodified) to 
 
 Note: most upstream projects ship manifests *without* resource requests (left for users/Helm values to set), so 3 of the 5 real-world fixtures intentionally exercise the "missing cpu/memory request" error path rather than the happy path.
 Add a case by dropping a new `.yaml` file here and a matching row in the test table.
+
+## Capacity growth demo
+
+`oversized-deployment.yaml` defines a new `production/capacity-growth-demo`
+Deployment with 40 replicas, each requesting 500m CPU and 512Mi memory.
+Its total requests are 20 CPU cores and 20 GiB memory, exceeding the two
+`t3.medium` workers in the repository's EKS configuration. Each pod is small
+enough to fit a worker, so the simulation can model additional nodes and a
+higher infrastructure bill rather than only oversized, unschedulable pods.
+
+Load this file in Manifest estimator, select Connected cluster, and analyze it.
+The exact added-node count and cost depend on the collected cluster report.
+This is an analysis fixture: do not apply it just to preview costs. Applying it
+can create real workloads and costs. The configured EKS node group has a maximum
+of three nodes; the simulation's added nodes are estimates, not a guarantee that
+the real cluster can scale to that size.

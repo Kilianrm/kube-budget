@@ -28,6 +28,18 @@ func TestConvertDeployment(t *testing.T) {
 			},
 		},
 		{
+			name:         "oversized deployment for capacity growth simulation",
+			manifestFile: "../../data/manifests/oversized-deployment.yaml",
+			wantWorkload: engine.Workload{
+				Name:      "capacity-growth-demo",
+				Namespace: "production",
+				Replicas:  40,
+				Resources: []pricing.Resource{
+					{Name: "web", CPU: 0.5, MemoryGB: 0.5},
+				},
+			},
+		},
+		{
 			name:         "missing memory request defaults to zero",
 			manifestFile: "../../data/manifests/missing-memory-request.yaml",
 			wantWorkload: engine.Workload{

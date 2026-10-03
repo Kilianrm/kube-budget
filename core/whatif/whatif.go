@@ -57,7 +57,13 @@ type PlanChange struct {
 
 // Result is the impact of deploying the workload.
 type Result struct {
-	Workload Workload `json:"workload"`
+	Workload          Workload             `json:"workload"`
+	Operation         string               `json:"operation"`
+	Current           *Workload            `json:"current,omitempty"`
+	CurrentRequested  costmodel.Projection `json:"currentRequested"`
+	CurrentCostKnown  bool                 `json:"currentCostKnown"`
+	ProposedRequested costmodel.Projection `json:"proposedRequested"`
+	RequestedDelta    costmodel.Projection `json:"requestedDelta"`
 	// Fits is true when every replica lands on nodes the cluster already has.
 	Fits          bool        `json:"fits"`
 	Placements    []Placement `json:"placements"`
@@ -94,20 +100,65 @@ func Simulate(report costmodel.CostReport, workload Workload, inputs Inputs) Res
 	}
 	result := Result{
 		Workload:    workload,
+		Operation:   "new",
 		Placements:  make([]Placement, 0),
 		PlanChanges: make([]PlanChange, 0),
 		Warnings:    make([]string, 0),
 		Assumptions: assumptions,
 	}
 
-	pool, estimatedFree := schedulableNodes(report)
+	baseline := report
+	for _, item := range report.Items {
+		if !matchesWorkload(item, workload) || item.Basis != costmodel.BasisRequested {
+			continue
+		}
+		result.Operation = "update"
+		replicas, _ := item.Detail["replicas"].(float64)
+		perReplica := costmodel.Usage{}
+		if replicas > 0 {
+			perReplica = item.Usage.Scale(1 / replicas)
+		}
+		if desired, ok := item.Detail["desiredReplicas"].(float64); ok {
+			replicas = desired
+		}
+		if declared, ok := item.Detail["perReplica"].(costmodel.Usage); ok && (declared != (costmodel.Usage{}) || item.Usage == (costmodel.Usage{})) {
+			perReplica = declared
+		}
+		containers, _ := item.Detail["containers"].(int)
+		result.Current = &Workload{Name: workload.Name, Namespace: workload.Namespace, Kind: workload.Kind,
+			Replicas: int(replicas), PerReplica: perReplica, Containers: containers}
+		result.CurrentRequested = item.Cost
+		result.CurrentCostKnown = item.Priced()
+		baseline = withoutWorkload(report, workload, item)
+		result.Assumptions = append(result.Assumptions, costmodel.Assumption{
+			Key: "whatif-update", Detail: "steady-state replacement of the existing workload; temporary rollout overlap is excluded and existing nodes are not automatically removed",
+		})
+		break
+	}
+	if result.Operation == "new" {
+		for _, warning := range report.Warnings {
+			if warning.Code == "collection-incomplete" && warning.Subject == "deployments" {
+				result.Operation = "unknown"
+			}
+		}
+		if report.Scope.Namespace != "" && report.Scope.Namespace != workload.Namespace {
+			result.Operation = "unknown"
+		}
+		if result.Operation == "unknown" {
+			result.Warnings = append(result.Warnings, "Could not determine whether this workload exists: the report does not cover its Deployments. Impact assumes additional demand, not an update.")
+		}
+	}
+	proposed := workloadLineItem(workload, workload.Replicas, inputs.RateCard, false)
+	result.ProposedRequested = costmodel.Project(proposed.HourlyUSD)
+	result.RequestedDelta = costmodel.Project(proposed.HourlyUSD - result.CurrentRequested.Hourly)
+	pool, estimatedFree := schedulableNodes(baseline)
 	if estimatedFree {
 		result.Assumptions = append(result.Assumptions, costmodel.Assumption{
 			Key:    "whatif-free-capacity",
 			Detail: "pod placement was not collected, so each node's free capacity is its share of the cluster's free capacity",
 		})
 	}
-	template, hasTemplate := newNodeTemplate(pool, daemonSetOverhead(report))
+	template, hasTemplate := newNodeTemplate(pool, daemonSetOverhead(baseline))
 
 	noRequests := workload.PerReplica.CPUCores <= 0 && workload.PerReplica.MemoryGB <= 0
 	if noRequests {
@@ -155,7 +206,7 @@ func Simulate(report costmodel.CostReport, workload Workload, inputs Inputs) Res
 	workloadItem := workloadLineItem(workload, scheduled, inputs.RateCard, noRequests)
 	result.Requested = costmodel.Project(workloadItem.HourlyUSD)
 
-	items := append([]costmodel.LineItem(nil), report.Items...)
+	items := append([]costmodel.LineItem(nil), baseline.Items...)
 	for index, node := range newNodes {
 		items = append(items, node.lineItem(index))
 	}
@@ -174,6 +225,42 @@ func Simulate(report costmodel.CostReport, workload Workload, inputs Inputs) Res
 	result.PlanSavingsAfter = planAfter.Savings
 	result.PlanChanges = planChanges(planBefore, planAfter)
 	return result
+}
+
+func matchesWorkload(item costmodel.LineItem, workload Workload) bool {
+	return item.Subject.Kind == costmodel.SubjectWorkload && item.Subject.Name == workload.Name &&
+		item.Subject.Namespace == workload.Namespace && detailString(item, "kind") == workload.Kind
+}
+
+func withoutWorkload(report costmodel.CostReport, workload Workload, current costmodel.LineItem) costmodel.CostReport {
+	placements, hasPlacement := current.Detail["placementRequests"].(map[string]costmodel.Usage)
+	items := make([]costmodel.LineItem, 0, len(report.Items))
+	for _, item := range report.Items {
+		if matchesWorkload(item, workload) {
+			continue
+		}
+		if item.Subject.Kind == costmodel.SubjectNode {
+			detail := make(map[string]interface{}, len(item.Detail))
+			for key, value := range item.Detail {
+				detail[key] = value
+			}
+			item.Detail = detail
+			if hasPlacement {
+				usage := placements[item.Subject.Name]
+				if cores, ok := detail["requestedCores"].(float64); ok {
+					detail["requestedCores"] = max(0, cores-usage.CPUCores)
+				}
+				if memory, ok := detail["requestedMemoryGB"].(float64); ok {
+					detail["requestedMemoryGB"] = max(0, memory-usage.MemoryGB)
+				}
+			} else {
+				delete(detail, "requestedCores")
+				delete(detail, "requestedMemoryGB")
+			}
+		}
+		items = append(items, item)
+	}
+	return costmodel.NewReport(report.GeneratedAt, report.Scope, items, report.Warnings)
 }
 
 // candidate is a node a new replica may land on.

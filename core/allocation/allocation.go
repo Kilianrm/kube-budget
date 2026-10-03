@@ -320,6 +320,15 @@ func (builder *reportBuilder) addWorkloads() {
 			Basis:  costmodel.BasisRequested,
 			Detail: map[string]interface{}{"kind": workload.Kind, "containers": workload.Containers},
 		}
+		item.Detail["desiredReplicas"] = workload.Replicas
+		item.Detail["perReplica"] = workload.PerReplica
+		if builder.cluster.HasPlacement {
+			placements := make(map[string]costmodel.Usage, len(workload.Placements))
+			for _, placement := range workload.Placements {
+				placements[placement.Node] = placements[placement.Node].Add(placement.Usage)
+			}
+			item.Detail["placementRequests"] = placements
+		}
 
 		// A workload without requests has an unknown cost, never a zero cost:
 		// counting it as zero would silently inflate the idle figure.

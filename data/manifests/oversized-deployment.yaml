@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capacity-growth-demo
+  namespace: production
+spec:
+  replicas: 40
+  selector:
+    matchLabels:
+      app: capacity-growth-demo
+  template:
+    metadata:
+      labels:
+        app: capacity-growth-demo
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.28-alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

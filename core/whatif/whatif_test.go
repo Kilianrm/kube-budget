@@ -163,3 +163,101 @@ func TestAManifestWithoutRequestsIsFlagged(t *testing.T) {
 		t.Errorf("warnings = %v, want the missing requests called out", result.Warnings)
 	}
 }
+
+func TestUpdatingAWorkloadReplacesItsDemand(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		cores  float64
+		memory float64
+	}{
+		{name: "unchanged", cores: 1.5, memory: 6},
+		{name: "smaller", cores: 0.5, memory: 2},
+		{name: "larger", cores: 2.5, memory: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := existing(1.5, 6)
+			current.Detail["placementRequests"] = map[string]costmodel.Usage{"a": current.Usage}
+			report := reportOf(node("a", 1.5, 6), current)
+			proposed := Workload{Name: "base", Namespace: "prod", Kind: "Deployment", Replicas: 1,
+				PerReplica: costmodel.Usage{CPUCores: test.cores, MemoryGB: test.memory}, Containers: 1}
+			result := Simulate(report, proposed, Inputs{RateCard: card})
+			if result.Operation != "update" || result.Current == nil || !result.CurrentCostKnown {
+				t.Fatalf("comparison = %+v, want an identified, priced update", result)
+			}
+			if current.Detail["placementRequests"].(map[string]costmodel.Usage)["a"].CPUCores != 1.5 || report.Items[0].Detail["requestedCores"] != 1.5 {
+				t.Fatal("simulation mutated the source report")
+			}
+			if test.cores > 2 {
+				if result.Unschedulable != 1 || result.NewNodes != 0 {
+					t.Fatalf("oversized update = %+v, want pending without a modeled node", result)
+				}
+				return
+			}
+			if !result.Fits || result.NewNodes != 0 || result.BilledDelta.Hourly != 0 {
+				t.Fatalf("update = %+v, want replacement to fit without adding nodes", result)
+			}
+			expectedIdle := report.Totals[costmodel.BasisProvisioned].Hourly - test.cores*0.02 - test.memory*0.005
+			if !nearly(result.IdleAfter.Hourly, expectedIdle) {
+				t.Errorf("idle after = %v, want %v without counting the old workload", result.IdleAfter.Hourly, expectedIdle)
+			}
+		})
+	}
+}
+
+func TestWorkloadDetectionUsesKindNamespaceAndName(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		workload  Workload
+		operation string
+	}{
+		{name: "same identity", workload: Workload{Name: "base", Namespace: "prod", Kind: "Deployment"}, operation: "update"},
+		{name: "different namespace", workload: Workload{Name: "base", Namespace: "shop", Kind: "Deployment"}, operation: "new"},
+		{name: "different kind", workload: Workload{Name: "base", Namespace: "prod", Kind: "StatefulSet"}, operation: "new"},
+		{name: "different name", workload: Workload{Name: "api", Namespace: "prod", Kind: "Deployment"}, operation: "new"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := Simulate(reportOf(node("a", 1, 2), existing(1, 2)), test.workload, Inputs{RateCard: card})
+			if result.Operation != test.operation {
+				t.Errorf("operation = %q, want %q", result.Operation, test.operation)
+			}
+		})
+	}
+}
+
+func TestIncompleteWorkloadCollectionIsNotReportedAsNew(t *testing.T) {
+	report := reportOf(node("a", 0, 0))
+	report.Warnings = []costmodel.Warning{{Code: "collection-incomplete", Subject: "deployments", Message: "forbidden"}}
+	result := Simulate(report, api(1, 0.5, 1), Inputs{RateCard: card})
+	if result.Operation != "unknown" || len(result.Warnings) == 0 {
+		t.Fatalf("result = %+v, want unknown identity and an additional-demand caveat", result)
+	}
+	report.Warnings = nil
+	report.Scope.Namespace = "another-namespace"
+	result = Simulate(report, api(1, 0.5, 1), Inputs{RateCard: card})
+	if result.Operation != "unknown" {
+		t.Errorf("out-of-scope operation = %q, want unknown", result.Operation)
+	}
+}
+
+func TestAnOmittedNamespaceMatchesDefault(t *testing.T) {
+	current := existing(1, 2)
+	current.Subject.Namespace = "default"
+	result := Simulate(reportOf(node("a", 1, 2), current), Workload{Name: "base", Kind: "Deployment", Replicas: 1,
+		PerReplica: costmodel.Usage{CPUCores: 1, MemoryGB: 2}}, Inputs{RateCard: card})
+	if result.Operation != "update" || result.Workload.Namespace != "default" || !result.Fits {
+		t.Fatalf("result = %+v, want an update in default using estimated free capacity", result)
+	}
+}
+
+func TestUpdatingReplicasAddsOnlyTheRequiredCapacity(t *testing.T) {
+	current := existing(1.5, 6)
+	current.Detail["placementRequests"] = map[string]costmodel.Usage{"a": current.Usage}
+	result := Simulate(reportOf(node("a", 1.5, 6), current), Workload{Name: "base", Namespace: "prod", Kind: "Deployment",
+		Replicas: 2, PerReplica: costmodel.Usage{CPUCores: 1.5, MemoryGB: 6}}, Inputs{RateCard: card})
+	if result.Operation != "update" || result.NewNodes != 1 || !nearly(result.BilledDelta.Hourly, 0.08) {
+		t.Fatalf("result = %+v, want one additional node after replacing the old replica", result)
+	}
+	if !nearly(result.RequestedDelta.Hourly, 0.06) {
+		t.Errorf("requested delta = %v, want 0.06", result.RequestedDelta.Hourly)
+	}
+}
