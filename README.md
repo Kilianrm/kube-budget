@@ -172,6 +172,36 @@ wails dev -tags webkit2_41
 
 Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work on the visual frontend without launching the desktop shell, run `npm run dev` from `frontend`; cost estimation is only available when the page runs inside Wails.
 
+### Manifest change preview
+
+In the Manifest estimator, select **Connected cluster**, add a Deployment YAML,
+and click **Analyze manifest**. Cluster impact automatically matches the
+Deployment by kind, namespace, and name against the collected cost report.
+An omitted namespace resolves to `default`.
+
+- **New workload**: no matching Deployment was found in the covered namespace.
+- **Update existing workload**: shows current and proposed replica counts,
+   CPU/memory requests per pod, and monthly attributed cost. Simulation replaces
+   the existing requests rather than adding a second copy of the workload.
+- **Workload status unknown**: Deployment collection failed or the namespace was
+   outside the report's scope. Capacity impact assumes additional demand.
+
+This is read-only, steady-state analysis against the report's displayed timestamp,
+not a deployment or a scheduling guarantee. Temporary rollout overlap is excluded;
+existing nodes are retained even when requests decrease. Current attribution uses
+collected node rates, while proposed attribution uses the reference machine's rates.
+Re-run the estimation after refreshing the Cost report to analyze against a newer
+baseline. Catalog pricing remains a standalone estimate and does not check whether
+the workload exists.
+
+When the manifest filename and connected kubeconfig context are known, **Apply manifest** includes a
+one-click copy button for a Bash-compatible `kubectl apply` command. It explicitly
+targets that context and the analyzed namespace, includes the configured kubeconfig
+path when present, and references the uploaded filename with `-f`. The command does
+not include the YAML contents. The file must exist in the terminal's current directory
+and contain any changes made in the editor. Pasted YAML without a filename does not
+offer a file-based command. KubeBudget does not execute the command.
+
 ### Amazon EKS connection MVP
 
 The dashboard supports EKS through the local AWS CLI and kubeconfig `exec` authentication. It does not collect or store AWS access keys, secret keys, or Kubernetes bearer tokens.
@@ -214,8 +244,10 @@ In the cluster connection dialog, choose **Amazon EKS**, enter the cluster name 
 - [x] Add Budget & forecast section in Cost section.
 - [x] Add optimization section in Cost Section.
 - [x] Create enhanced eks cluster to check cost optimization functionality
-- [ ] Enhance Manifest section
-- [ ] Add enhanced estimation in manifest mode when cluster from provider is linked.
+- [x] Add enhanced estimation in manifest mode when cluster from provider is linked.
+- [x] Enhance Manifest section
+- [x] Add .csv/pdf download data feature.
+
 ...
 ...
 - [ ] Add Kubernetes admission webhook support

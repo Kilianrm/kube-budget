@@ -26,6 +26,7 @@ import {
   Server,
   ServerCog,
   SlidersHorizontal,
+  Terminal,
   UploadCloud,
   X,
   Zap,
@@ -38,6 +39,8 @@ import { ConnectionModal } from "./ConnectionModal";
 import { CostSection } from "./CostSection";
 import { CostReportProvider, useCostReport } from "./CostReportContext";
 import { ClusterImpact } from "./ClusterImpact";
+import { CopyCommand } from "./Optimizations";
+import { buildManifestApplyCommand } from "./manifestApplyCommand";
 import { EstimationHistoryProvider, useEstimationHistory, SavedEstimation } from "./EstimationHistory";
 import { EstimationRegistry } from "./HistoryPanel";
 
@@ -105,10 +108,10 @@ function AppContent() {
   const [estimateView, setEstimateView] = useState<EstimateView>("estimator");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [estimationMode, setEstimationMode] = useState<EstimationMode>("manual");
-  const [showConnectHint, setShowConnectHint] = useState(true);
   const fileInput = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [manifest, setManifest] = useState("");
+  const [analyzedFileName, setAnalyzedFileName] = useState("");
   const [provider, setProvider] = useState<Provider>("aws");
   const [region, setRegion] = useState("us-east-1");
   const [instanceType, setInstanceType] = useState("m6i.large");
@@ -119,6 +122,7 @@ function AppContent() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const connectionRevision = useRef(0);
   const connectionPlatform = clusterConnection?.provider === "aws-eks"
     ? { label: "EKS", accessibleLabel: "Amazon EKS", className: "aws", icon: <Cloud size={15} /> }
     : { label: "LOCAL", accessibleLabel: "Local or on-premises Kubernetes", className: "local", icon: <Server size={15} /> };
@@ -128,16 +132,22 @@ function AppContent() {
   const { snapshot: clusterSnapshot } = useClusterSnapshot();
   const clusterPlatform = clusterSnapshot?.platform;
   const clusterPriceable = isConnected() && clusterPlatform?.supported !== false;
+  const applyCommand = simulation && buildManifestApplyCommand(analyzedFileName, clusterConnection?.context, simulation.impact.workload.namespace, clusterConnection?.kubeconfigPath);
+
+  useEffect(() => {
+    connectionRevision.current++;
+    setResult(null);
+    setSimulation(null);
+    setActiveTab("overview");
+  }, [clusterConnection?.context, clusterConnection?.kubeconfigPath, clusterConnection?.namespace]);
 
   // Auto-switch to cluster mode when a priceable cluster is connected, and
   // back to catalog pricing when it turns out it cannot be priced.
   useEffect(() => {
     if (clusterPriceable) {
       setEstimationMode("cluster");
-      setShowConnectHint(false);
     } else if (isConnected()) {
       setEstimationMode("manual");
-      setShowConnectHint(false);
     }
   }, [clusterPriceable, isConnected()]);
 
@@ -198,9 +208,11 @@ function AppContent() {
 
     setIsLoading(true);
     setError("");
+    const revision = connectionRevision.current;
     try {
       const document = { name: fileName || "untitled.yaml", content: manifest };
       let estimate: ManifestResult;
+      let savedSimulation: SimulationResult | undefined;
       if (estimationMode === "cluster") {
         // The simulation runs against the shared cost report; load it first
         // if the Cost section has not done so yet.
@@ -209,14 +221,18 @@ function AppContent() {
           throw new Error(costReport.error || "The cluster's cost report could not be loaded.");
         }
         const simulated = await simulateManifest(current.clusterId, document);
+        if (revision !== connectionRevision.current) return;
+        savedSimulation = simulated;
         setSimulation(simulated);
         estimate = simulated.estimate as ManifestResult;
         setActiveTab("impact");
       } else {
         estimate = await estimateManifest({ documents: [document], provider, region, instanceType });
+        if (revision !== connectionRevision.current) return;
         setSimulation(null);
         setActiveTab("overview");
       }
+      setAnalyzedFileName(fileName);
       setResult(estimate);
 
       // Save to history
@@ -231,8 +247,10 @@ function AppContent() {
         currency: estimate.currency,
         manifest,
         fullResult: estimate,
+        simulation: savedSimulation,
       });
     } catch (reason) {
+      if (revision !== connectionRevision.current) return;
       setResult(null);
       setSimulation(null);
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -316,16 +334,16 @@ function AppContent() {
       <ConnectionModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
 
       <div className="app-body">
-        {activeSection === "estimate" && <aside className="app-sidebar" aria-label="Estimator navigation">
-          <span className="sidebar-label">WORKSPACE</span>
+        {activeSection === "estimate" && <aside className="cluster-sidebar manifest-sidebar" aria-label="Estimator navigation">
+          <span className="sidebar-label">MANIFEST</span>
           <button type="button" className={estimateView === "estimator" ? "active" : ""} onClick={() => setEstimateView("estimator")}><Gauge size={17} /><span>Estimator</span></button>
-          <button type="button" className={estimateView === "registry" ? "active" : ""} onClick={() => setEstimateView("registry")}><Clock size={17} /><span>Saved estimates</span></button>
+          <button type="button" className={estimateView === "registry" ? "active" : ""} onClick={() => setEstimateView("registry")}><Clock size={17} /><span>Historial</span></button>
         </aside>}
         <div className={`app-main ${activeSection === "cluster" || activeSection === "cost" ? "cluster-app-main" : ""}`}>
-      {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "cost" ? <CostSection onConnectClick={() => setIsModalOpen(true)} onTestWorkload={() => { setActiveSection("estimate"); setEstimateView("estimator"); setEstimationMode("cluster"); setResult(null); setSimulation(null); }} /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace ${result ? "has-result" : "manifest-stage"}`}>
+      {activeSection === "cluster" ? <ClusterConnection /> : activeSection === "cost" ? <CostSection onConnectClick={() => setIsModalOpen(true)} onTestWorkload={() => { setActiveSection("estimate"); setEstimateView("estimator"); setEstimationMode("cluster"); setResult(null); setSimulation(null); }} /> : estimateView === "registry" ? <EstimationRegistry /> : <section className={`workspace manifest-workspace ${result ? "has-result" : "manifest-stage"}`}>
         <aside className="input-pane">
-          <div className="pane-heading">
-            <div><span className="step-label">01 / INPUT</span><h1>Manifest</h1></div>
+          <div className="management-header">
+            <div><span className="step-label">MANIFEST / ESTIMATOR</span><h1>Manifest estimator</h1></div>
             {(manifest || result) && (
               <button className="icon-button" type="button" onClick={resetWorkspace} title="Reset workspace" aria-label="Reset workspace">
                 <RotateCcw size={17} />
@@ -333,6 +351,8 @@ function AppContent() {
             )}
           </div>
 
+          <div className="manifest-input-grid">
+          <section className="manifest-source-editor" aria-label="Manifest source">
           <div
             className={`drop-zone ${isDragging ? "is-dragging" : ""} ${manifest ? "has-file" : ""}`}
             onDragEnter={() => setIsDragging(true)}
@@ -362,21 +382,12 @@ function AppContent() {
             placeholder="Paste a Deployment manifest here..."
             spellCheck={false}
           />
+          </section>
 
+          <section className="manifest-settings" aria-label="Estimation settings">
           <div className="estimation-mode-section">
             <div className="mode-header">
               <span className="mode-label">Estimation source</span>
-              {!isConnected() && (
-                <button
-                  type="button"
-                  className="quick-connect-button"
-                  onClick={() => setIsModalOpen(true)}
-                  title="Connect a cluster to enable better estimates"
-                >
-                  <PlugZap size={14} />
-                  Connect cluster
-                </button>
-              )}
             </div>
             <div className="mode-selector" role="group" aria-label="Estimation mode">
               <button
@@ -397,15 +408,17 @@ function AppContent() {
               </button>
               <button
                 type="button"
-                className={`mode-button ${estimationMode === "cluster" ? "active" : ""} ${!clusterPriceable ? "disabled" : ""}`}
+                className={`mode-button ${isConnected() ? "cluster-connected" : "cluster-disconnected"} ${clusterPriceable && estimationMode === "cluster" ? "active" : ""} ${isConnected() && !clusterPriceable ? "disabled" : ""}`}
                 onClick={() => {
-                  if (clusterPriceable) {
+                  if (!isConnected()) {
+                    setIsModalOpen(true);
+                  } else if (clusterPriceable) {
                     setEstimationMode("cluster");
                     setResult(null);
                     setSimulation(null);
                   }
                 }}
-                disabled={!clusterPriceable}
+                disabled={isConnected() && !clusterPriceable}
                 title={!isConnected() ? "Connect a cluster first" : clusterPriceable ? "Price with the cluster's own rates and simulate deploying it there" : `This cluster cannot be priced: ${clusterPlatform?.reason ?? ""}`}
               >
                 <Network size={16} />
@@ -413,32 +426,9 @@ function AppContent() {
                   <strong>Connected cluster</strong>
                   <small>{!isConnected() ? "Connect a cluster" : clusterPriceable ? clusterConnection?.name : "No price list for this cluster"}</small>
                 </span>
-                <span className={`value-badge ${isConnected() ? "connected" : "disconnected"}`}>
-                  {isConnected() ? "Shows cluster impact" : "Connect to activate"}
-                </span>
               </button>
             </div>
           </div>
-
-          {!isConnected() && showConnectHint && (
-            <div className="onboarding-hint">
-              <div className="hint-content">
-                <Lightbulb size={16} />
-                <div>
-                  <strong>Pro tip: Connect a cluster</strong>
-                  <p>Connect a Kubernetes cluster to price manifests at its own rates and see what deploying them does to its bill, idle capacity and budget.</p>
-                </div>
-                <button
-                  type="button"
-                  className="hint-close-button"
-                  onClick={() => setShowConnectHint(false)}
-                  aria-label="Dismiss hint"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-          )}
 
           {estimationMode === "manual" && <div className="pricing-section">
             <div className="section-title"><Cloud size={16} /><span>Pricing assumptions</span></div>
@@ -486,15 +476,35 @@ function AppContent() {
 
           <button className="estimate-button" type="button" disabled={isLoading || !manifest.trim()} onClick={runEstimate}>
             {isLoading ? <LoaderCircle className="spin" size={18} /> : <CircleDollarSign size={18} />}
-            {isLoading ? "Estimating..." : "Estimate manifest"}
+            {isLoading ? "Analyzing..." : "Analyze manifest"}
             {!isLoading && <ArrowRight size={18} />}
           </button>
+          </section>
+          </div>
         </aside>
 
         <section className="result-pane">
-          <div className="pane-heading result-heading">
-            <div><span className="step-label">02 / ESTIMATE</span><h2>{result ? result.workload.name : "Cost analysis"}</h2></div>
-            {result && <div className="result-heading-actions"><button type="button" className="new-estimate-button" onClick={resetWorkspace}><RotateCcw size={14} /> New estimate</button><div className="valid-badge"><Check size={14} /> Valid deployment</div></div>}
+          <div className="management-header result-heading">
+            <div><span className="step-label">MANIFEST / ANALYSIS</span><h1>{result ? result.workload.name : "Cost analysis"}</h1></div>
+            {result && <div className="result-heading-actions">
+              {applyCommand && simulation && <details className="manifest-apply-menu" key={applyCommand} onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.currentTarget.open = false;
+                  event.currentTarget.querySelector("summary")?.focus();
+                }
+              }} onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
+              }}>
+                <summary className="secondary-button"><Terminal size={14} /> Apply manifest <ChevronDown size={14} /></summary>
+                <section className="manifest-apply-command" aria-label="Apply manifest command">
+                  <p className="manifest-baseline">{clusterConnection?.name} / {simulation.impact.workload.namespace} / Bash-compatible shell. Not executed by KubeBudget.</p>
+                  <CopyCommand command={applyCommand} />
+                  <div className="budget-alert" role="note" aria-label="Namespace prerequisite"><AlertCircle size={15} /><span>If namespace "{simulation.impact.workload.namespace}" does not exist, this command will fail. Namespace existence is not checked.</span></div>
+                  <p className="manifest-baseline">File path is relative to your terminal directory. The local file must contain the analyzed changes.</p>
+                </section>
+              </details>}
+              <button type="button" className="secondary-button manifest-new-estimation" onClick={resetWorkspace}><RotateCcw size={14} /> New estimation</button>
+            </div>}
           </div>
 
           {!result ? (
@@ -516,6 +526,7 @@ function AppContent() {
             </div>
           ) : (
             <div className="result-content">
+              {!simulation && <p className="manifest-baseline">{estimationMode === "manual" ? "Standalone estimate. Existing workloads are not checked." : "Saved estimate. Analyze again to compare with the connected cluster."}</p>}
               <nav className="tabs" aria-label="Estimate views">
                 {((simulation ? ["impact", "overview", "resources", "source"] : ["overview", "resources", "source"]) as ResultTab[]).map((tab) => (
                   <button key={tab} type="button" className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)}>
@@ -528,7 +539,7 @@ function AppContent() {
                 ))}
               </nav>
 
-              {activeTab === "impact" && simulation && <ClusterImpact simulation={simulation} isRefreshing={costReport.isLoading || isLoading} onRefresh={async () => { if (await costReport.refresh()) await runEstimate(); }} />}
+              {activeTab === "impact" && simulation && <ClusterImpact simulation={simulation} clusterName={clusterConnection?.name ?? "connected cluster"} />}
               {activeTab === "overview" && <Overview result={result} />}
               {activeTab === "resources" && <Resources result={result} />}
               {activeTab === "source" && <pre className="source-preview"><code>{manifest}</code></pre>}
@@ -1592,20 +1603,16 @@ function formatResourceAttributes(attributes: Record<string, string>) {
 
 function Overview({ result }: { result: ManifestResult }) {
   return (
-    <div className="overview-view">
-      <section className="total-band">
-        <div><span>Estimated monthly cost</span><strong>{formatMoney(result.monthlyTotal, result.currency)}</strong><small>730-hour run rate from resource requests</small></div>
-        <div className="cost-pulse"><CircleDollarSign size={28} /></div>
-      </section>
+    <div className="cluster-screen-content overview-view">
+      <div className="cluster-metrics">
+        <div className="cluster-metric"><span>Estimated monthly cost</span><strong>{formatMoney(result.monthlyTotal, result.currency)}</strong><small>730-hour run rate</small></div>
+        <div className="cluster-metric"><span>Hourly cost</span><strong>{formatMoney(result.hourlyTotal, result.currency)}</strong><small>Requested resources</small></div>
+        <div className="cluster-metric"><span>Daily cost</span><strong>{formatMoney(result.dailyTotal, result.currency)}</strong><small>24-hour run rate</small></div>
+        <div className="cluster-metric"><span>Replicas</span><strong>{result.workload.replicas}</strong><small>{result.workload.resources.length} container{result.workload.resources.length === 1 ? "" : "s"} per pod</small></div>
+      </div>
 
-      <section className="metric-row">
-        <div><span>Hourly</span><strong>{formatMoney(result.hourlyTotal, result.currency)}</strong></div>
-        <div><span>Daily</span><strong>{formatMoney(result.dailyTotal, result.currency)}</strong></div>
-        <div><span>Replicas</span><strong>{result.workload.replicas}</strong></div>
-      </section>
-
-      <section className="details-section">
-        <div className="section-header"><h3>Workload profile</h3><span>{result.workload.resources.length} container{result.workload.resources.length === 1 ? "" : "s"}</span></div>
+      <section className="cluster-panel">
+        <div className="cluster-panel-heading"><h2>Workload profile</h2><small>{result.workload.resources.length} container{result.workload.resources.length === 1 ? "" : "s"}</small></div>
         <dl className="detail-list">
           <div><dt>Kind</dt><dd>Deployment</dd></div>
           <div><dt>Namespace</dt><dd>{result.workload.namespace || "default"}</dd></div>
@@ -1614,8 +1621,8 @@ function Overview({ result }: { result: ManifestResult }) {
         </dl>
       </section>
 
-      <section className="details-section">
-        <div className="section-header"><h3>Container cost share</h3><span>USD / hour</span></div>
+      <section className="cluster-panel">
+        <div className="cluster-panel-heading"><h2>Container cost share</h2><small>USD / hour</small></div>
         <div className="cost-bars">
           {result.workload.resources.map((resource, index) => {
             const share = result.hourlyTotal ? (resource.hourlyCost / result.hourlyTotal) * 100 : 0;
@@ -1634,8 +1641,8 @@ function Overview({ result }: { result: ManifestResult }) {
 
 function Resources({ result }: { result: ManifestResult }) {
   return (
-    <div className="resource-view">
-      <div className="section-header"><h3>Requested resources</h3><span>Per pod</span></div>
+    <div className="resource-view cluster-panel">
+      <div className="cluster-panel-heading"><h2>Requested resources</h2><small>Per pod</small></div>
       <div className="resource-table-wrap">
         <table className="resource-table">
           <thead><tr><th>Container</th><th>CPU</th><th>Memory</th><th>Storage</th><th>GPU</th><th>Hourly</th></tr></thead>
