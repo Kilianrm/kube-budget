@@ -74,7 +74,7 @@ export function CostSection({ onConnectClick, onTestWorkload }: { onConnectClick
 
   return (
     <>
-      <aside className="cluster-sidebar" aria-label="Cost workspace options">
+      <aside className="cluster-sidebar cost-sidebar" aria-label="Cost workspace options">
         <span className="sidebar-label">COST</span>
         <button type="button" className={view === "explorer" ? "active" : ""} onClick={() => setView("explorer")}><CircleDollarSign size={16} /><span>Cost explorer</span></button>
         <button type="button" className={view === "budget" ? "active" : ""} onClick={() => setView("budget")}><Wallet size={16} /><span>Budget &amp; forecast</span></button>
