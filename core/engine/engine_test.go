@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/pricing"
 )
 
 func TestEstimateMultipliesCostsByReplicas(t *testing.T) {

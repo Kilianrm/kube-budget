@@ -5,18 +5,18 @@ kind: Namespace
 metadata:
   name: shop
   labels:
-    purpose: kube-budget-showcase
+    purpose: kube-cost-workspace-showcase
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: batch
   labels:
-    purpose: kube-budget-showcase
+    purpose: kube-cost-workspace-showcase
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: platform
   labels:
-    purpose: kube-budget-showcase
+    purpose: kube-cost-workspace-showcase

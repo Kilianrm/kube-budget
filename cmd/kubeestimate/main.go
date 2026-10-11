@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	manifestmode "kube-budget/internal/application/manifest"
-	"kube-budget/internal/providers"
+	manifestmode "kube-cost-workspace/internal/application/manifest"
+	"kube-cost-workspace/internal/providers"
 )
 
 const (

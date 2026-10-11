@@ -1,6 +1,6 @@
 # Core Engine
 
-This directory contains the core logic for KubeBudget.
+This directory contains the core logic for Kube Cost Workspace.
 
 The purpose of the core is to keep the cost estimation logic independent from CLI, GitHub Actions, and Kubernetes-specific input parsing. In other words, the core should answer one question clearly:
 

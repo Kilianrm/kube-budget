@@ -1,8 +1,8 @@
-# KubeBudget Architecture
+# Kube Cost Workspace Architecture
 
-This document describes the target architecture and expanded product scope for KubeBudget. It distinguishes the reusable estimation behavior from the ways users and automation invoke it.
+This document describes the target architecture and expanded product scope for Kube Cost Workspace. It distinguishes the reusable estimation behavior from the ways users and automation invoke it.
 
-KubeBudget has two principal estimation workflows:
+Kube Cost Workspace has two principal estimation workflows:
 
 - **Manifest Mode** estimates the requested cost of Kubernetes manifests before or independently of deployment.
 - **Cluster Mode** inspects workloads in a linked Kubernetes cluster and estimates their requested cost while retaining live cluster context.
@@ -211,7 +211,7 @@ Candidate matching signals include:
 - labels and annotations
 - Helm release metadata
 - Argo CD or Flux metadata
-- an explicit KubeBudget annotation containing source repository and manifest identity
+- an explicit Kube Cost Workspace annotation containing source repository and manifest identity
 
 Kubernetes UIDs identify live objects but cannot independently match a pre-deployment manifest because the UID is assigned by the cluster. Correlation results therefore include a confidence level and reasons for the match.
 
@@ -376,4 +376,4 @@ The architecture intentionally leaves these details open until their requirement
 
 ## Product statement
 
-KubeBudget is a Go-based Kubernetes cost-estimation platform with reusable Manifest Mode and Cluster Mode services. Multiple entry points, including a CLI, kubectl plugin, GitHub Action, admission webhook, and Wails Local Dashboard, reuse transport-independent service contracts and the same requested-cost engine while preserving source-specific context for cluster inspection, resource correlation, and planned-versus-live comparison.
+Kube Cost Workspace is a Go-based Kubernetes cost-estimation platform with reusable Manifest Mode and Cluster Mode services. Multiple entry points, including a CLI, kubectl plugin, GitHub Action, admission webhook, and Wails Local Dashboard, reuse transport-independent service contracts and the same requested-cost engine while preserving source-specific context for cluster inspection, resource correlation, and planned-versus-live comparison.

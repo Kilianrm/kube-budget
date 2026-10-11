@@ -10,8 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
-	"kube-budget/core/engine"
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/engine"
+	"kube-cost-workspace/core/pricing"
 )
 
 const bytesPerGiB = 1024 * 1024 * 1024

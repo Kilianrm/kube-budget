@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/optimize"
-	clustermode "kube-budget/internal/application/cluster"
-	"kube-budget/internal/application/costexplorer"
-	"kube-budget/internal/providers"
-	"kube-budget/internal/storage/recommendations"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/optimize"
+	clustermode "kube-cost-workspace/internal/application/cluster"
+	"kube-cost-workspace/internal/application/costexplorer"
+	"kube-cost-workspace/internal/providers"
+	"kube-cost-workspace/internal/storage/recommendations"
 )
 
 func TestAReportThatNoLongerDetectsAnAppliedChangeConfirmsIt(t *testing.T) {
@@ -38,7 +38,7 @@ func TestAReportThatNoLongerDetectsAnAppliedChangeConfirmsIt(t *testing.T) {
 	}
 }
 
-func TestAFixMadeOutsideKubeBudgetIsLoggedAndCanBeClaimed(t *testing.T) {
+func TestAFixMadeOutsideKubeCostWorkspaceIsLoggedAndCanBeClaimed(t *testing.T) {
 	store := recommendations.New(filepath.Join(t.TempDir(), "recommendations.json"))
 	at := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
 	// the previous report detected an orphan volume

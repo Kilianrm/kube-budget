@@ -3,9 +3,9 @@ package costexplorer
 import (
 	"testing"
 
-	"kube-budget/core/costmodel"
-	clustermode "kube-budget/internal/application/cluster"
-	"kube-budget/internal/providers"
+	"kube-cost-workspace/core/costmodel"
+	clustermode "kube-cost-workspace/internal/application/cluster"
+	"kube-cost-workspace/internal/providers"
 )
 
 func snapshot() clustermode.Snapshot {

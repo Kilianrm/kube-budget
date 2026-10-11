@@ -13,11 +13,11 @@ async function createReport(title: string, capturedAt: string) {
   const contentWidth = pageWidth - margin * 2;
   let cursorY = 18;
 
-  pdf.setProperties({ title: `KubeBudget ${title}`, subject: "Kubernetes cost report", creator: "KubeBudget" });
+  pdf.setProperties({ title: `Kube Cost Workspace ${title}`, subject: "Kubernetes cost report", creator: "Kube Cost Workspace" });
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(19);
   pdf.setTextColor(23, 37, 31);
-  pdf.text("KubeBudget", margin, cursorY);
+  pdf.text("Kube Cost Workspace", margin, cursorY);
   cursorY += 8;
   pdf.setFontSize(13);
   pdf.setTextColor(28, 53, 73);
@@ -74,7 +74,7 @@ async function createReport(title: string, capturedAt: string) {
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(8);
       pdf.setTextColor(120, 132, 127);
-      pdf.text(`KubeBudget / ${title}`, margin, pageHeight - 8);
+      pdf.text(`Kube Cost Workspace / ${title}`, margin, pageHeight - 8);
       pdf.text(`${page} / ${pageCount}`, pageWidth - margin, pageHeight - 8, { align: "right" });
     }
     pdf.save(filename);
@@ -120,7 +120,7 @@ export async function downloadBudgetForecastPdf(report: CostReport, forecast: Co
   for (const assumption of report.assumptions ?? []) pdf.addNote(assumption.detail);
   for (const warning of report.warnings ?? []) pdf.addNote(`${warning.subject ? `${warning.subject}: ` : ""}${warning.message}`);
 
-  pdf.save(`kubebudget-budget-forecast-${new Date().toISOString().slice(0, 10)}.pdf`);
+  pdf.save(`kube-cost-workspace-budget-forecast-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 export async function downloadOptimizationPdf(report: CostReport, optimization: OptimizationResult, budget?: number) {
@@ -170,7 +170,7 @@ export async function downloadOptimizationPdf(report: CostReport, optimization: 
   pdf.addNote("Savings are estimates at published list prices and are not measured until a change is applied and a later cost report confirms its impact. Recommendations can be limited by missing or incomplete cluster data.");
   for (const warning of report.warnings ?? []) pdf.addNote(`${warning.subject ? `${warning.subject}: ` : ""}${warning.message}`);
 
-  pdf.save(`kubebudget-optimization-plan-${new Date().toISOString().slice(0, 10)}.pdf`);
+  pdf.save(`kube-cost-workspace-optimization-plan-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 function formatTimestamp(value: string | Date) {

@@ -1,6 +1,6 @@
 package pricing
 
-import "kube-budget/core/costmodel"
+import "kube-cost-workspace/core/costmodel"
 
 // PurchaseOption is the commercial term a resource is billed under.
 type PurchaseOption string

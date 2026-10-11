@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/pricing"
 )
 
 func TestEstimateConvertsAndPricesManifest(t *testing.T) {

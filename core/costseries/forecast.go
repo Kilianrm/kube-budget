@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"kube-budget/core/costmodel"
+	"kube-cost-workspace/core/costmodel"
 )
 
 // Forecast projects the billed spend of the current calendar month. It keeps

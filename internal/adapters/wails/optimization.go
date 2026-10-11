@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/optimize"
-	"kube-budget/core/pricing"
-	clustermode "kube-budget/internal/application/cluster"
-	"kube-budget/internal/providers"
-	"kube-budget/internal/storage/recommendations"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/optimize"
+	"kube-cost-workspace/core/pricing"
+	clustermode "kube-cost-workspace/internal/application/cluster"
+	"kube-cost-workspace/internal/providers"
+	"kube-cost-workspace/internal/storage/recommendations"
 )
 
 // OptimizationResult is the optimization plan plus what the user already did
@@ -26,7 +26,7 @@ type OptimizationResult struct {
 	// recommendations being applied.
 	Progress map[string][]DoneResource `json:"progress"`
 	// Claimable are the IDs logged as no longer detected that the user can
-	// still record as applied outside KubeBudget.
+	// still record as applied outside Kube Cost Workspace.
 	Claimable []string `json:"claimable"`
 }
 
@@ -61,7 +61,7 @@ type AppliedRecommendation struct {
 	// Pending until a report no longer detects the recommendation.
 	Pending     bool       `json:"pending"`
 	ConfirmedAt *time.Time `json:"confirmedAt,omitempty"`
-	// Unmarked when the change was made outside KubeBudget and only noticed
+	// Unmarked when the change was made outside Kube Cost Workspace and only noticed
 	// because the recommendation disappeared.
 	Unmarked bool                 `json:"unmarked,omitempty"`
 	Expected costmodel.Projection `json:"expected"`
@@ -109,7 +109,7 @@ func (adapter *ClusterAdapter) ReopenRecommendation(request RecommendationReques
 }
 
 // ClaimRecommendation records a recommendation logged as no longer detected
-// as applied outside KubeBudget, when the user says the change was theirs.
+// as applied outside Kube Cost Workspace, when the user says the change was theirs.
 func (adapter *ClusterAdapter) ClaimRecommendation(request RecommendationRequest) (OptimizationResult, error) {
 	return adapter.changeRecommendation(request, func(store *recommendations.Store, clusterID string, _ optimize.Plan, _ costmodel.CostReport) error {
 		return store.Claim(clusterID, request.ID, time.Now())

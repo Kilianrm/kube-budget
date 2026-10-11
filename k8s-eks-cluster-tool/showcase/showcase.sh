@@ -5,7 +5,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CLUSTER_CONFIG="$SCRIPT_DIR/cluster/eks-showcase.yaml"
 WORKLOADS_DIR="$SCRIPT_DIR/workloads"
 SCENARIOS_DIR="$SCRIPT_DIR/scenarios"
-CLUSTER_NAME="kube-budget-showcase"
+CLUSTER_NAME="kube-cost-workspace-showcase"
 REGION="us-east-1"
 PROFILE="default"
 ASSUME_YES=false
@@ -180,7 +180,7 @@ create() {
   cat <<EOF
 
 Showcase is ready. Wait a minute or two for metrics-server to sample the pods,
-then connect KubeBudget with:
+then connect Kube Cost Workspace with:
   Connection source: Amazon EKS
   Cluster name:      $CLUSTER_NAME
   AWS region:        $REGION
@@ -243,7 +243,7 @@ scenario() {
       fail "unknown scenario: $name (missing-requests, traffic-spike, cordoned-node)"
       ;;
   esac
-  printf '\nScenario %s is %s. Refresh the cost report in KubeBudget.\n' "$name" "$state"
+  printf '\nScenario %s is %s. Refresh the cost report in Kube Cost Workspace.\n' "$name" "$state"
 }
 
 destroy() {

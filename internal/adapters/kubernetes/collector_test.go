@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	clustermode "kube-budget/internal/application/cluster"
+	clustermode "kube-cost-workspace/internal/application/cluster"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"

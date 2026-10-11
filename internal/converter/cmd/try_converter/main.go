@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"kube-budget/internal/converter"
+	"kube-cost-workspace/internal/converter"
 )
 
 func main() {

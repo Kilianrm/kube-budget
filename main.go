@@ -4,7 +4,7 @@ import (
 	"embed"
 	"log"
 
-	manifestwails "kube-budget/internal/adapters/wails"
+	manifestwails "kube-cost-workspace/internal/adapters/wails"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -16,7 +16,7 @@ var assets embed.FS
 
 func main() {
 	err := wails.Run(&options.App{
-		Title:     "KubeBudget",
+		Title:     "Kube Cost Workspace",
 		Width:     1440,
 		Height:    900,
 		MinWidth:  1024,

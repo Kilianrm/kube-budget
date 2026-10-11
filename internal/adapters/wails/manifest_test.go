@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/internal/providers"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/internal/providers"
 )
 
 func TestEstimateManifestReturnsUIResult(t *testing.T) {

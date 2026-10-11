@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"kube-budget/core/costmodel"
+	"kube-cost-workspace/core/costmodel"
 )
 
 // nodePause explains why node steps wait: a node recommendation being

@@ -1,4 +1,4 @@
-module kube-budget
+module kube-cost-workspace
 
 go 1.25.0
 

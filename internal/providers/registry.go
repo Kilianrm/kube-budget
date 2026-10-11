@@ -4,9 +4,9 @@ import (
 	"sort"
 	"strings"
 
-	"kube-budget/internal/providers/aws"
-	"kube-budget/internal/providers/azure"
-	"kube-budget/internal/providers/gcp"
+	"kube-cost-workspace/internal/providers/aws"
+	"kube-cost-workspace/internal/providers/azure"
+	"kube-cost-workspace/internal/providers/gcp"
 )
 
 var registry = map[string]Provider{

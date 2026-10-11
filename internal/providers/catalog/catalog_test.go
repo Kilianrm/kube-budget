@@ -3,8 +3,8 @@ package catalog
 import (
 	"testing"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/pricing"
 )
 
 var testCatalog = Catalog{

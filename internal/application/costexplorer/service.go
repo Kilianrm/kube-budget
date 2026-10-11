@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"kube-budget/core/allocation"
-	"kube-budget/core/costmodel"
-	"kube-budget/core/pricing"
-	clustermode "kube-budget/internal/application/cluster"
+	"kube-cost-workspace/core/allocation"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/pricing"
+	clustermode "kube-cost-workspace/internal/application/cluster"
 )
 
 const bytesPerGiB = 1024 * 1024 * 1024

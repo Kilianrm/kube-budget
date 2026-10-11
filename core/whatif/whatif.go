@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"sort"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/optimize"
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/optimize"
+	"kube-cost-workspace/core/pricing"
 )
 
 // Workload is the deployment being simulated.

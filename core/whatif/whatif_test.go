@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/pricing"
 )
 
 func nearly(got, want float64) bool {

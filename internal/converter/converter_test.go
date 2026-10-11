@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"kube-budget/core/engine"
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/engine"
+	"kube-cost-workspace/core/pricing"
 )
 
 func TestConvertDeployment(t *testing.T) {

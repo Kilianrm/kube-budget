@@ -32,7 +32,7 @@ type Applied struct {
 	ConfirmedAt *time.Time `json:"confirmedAt,omitempty"`
 	// Unmarked is set when the user claimed a recommendation that stopped
 	// being detected without being applied: the change was made outside
-	// KubeBudget. At is when it was last detected, and the rates are the ones
+	// Kube Cost Workspace. At is when it was last detected, and the rates are the ones
 	// seen then.
 	Unmarked bool `json:"unmarked,omitempty"`
 	// Details is the recommendation as it was last detected, kept opaque so
@@ -175,7 +175,7 @@ func DefaultPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("recommendations: resolve config directory: %w", err)
 	}
-	return filepath.Join(configDir, "kube-budget", "recommendations.json"), nil
+	return filepath.Join(configDir, "kube-cost-workspace", "recommendations.json"), nil
 }
 
 // Get returns a cluster's state; an unknown cluster has an empty one.
@@ -371,7 +371,7 @@ func (state *State) trackAbsences(detected map[string]Seen, marked map[string]bo
 }
 
 // Claim records a recommendation logged as no longer detected as applied
-// outside KubeBudget, when the user says the change was theirs. It is
+// outside Kube Cost Workspace, when the user says the change was theirs. It is
 // confirmed at once, with the rates last seen while it was detected.
 func (store *Store) Claim(clusterID, id string, at time.Time) error {
 	claimed := false

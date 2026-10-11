@@ -1,5 +1,5 @@
 {
-  "name": "kube-budget-dashboard",
+  "name": "kube-cost-workspace-dashboard",
   "private": true,
   "version": "0.1.0",
   "type": "module",

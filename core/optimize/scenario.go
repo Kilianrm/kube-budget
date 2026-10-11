@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"kube-budget/core/costmodel"
+	"kube-cost-workspace/core/costmodel"
 )
 
 const (

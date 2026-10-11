@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	clustermode "kube-budget/internal/application/cluster"
+	clustermode "kube-cost-workspace/internal/application/cluster"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/arn"

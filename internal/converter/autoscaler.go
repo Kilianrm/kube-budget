@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
-	"kube-budget/core/engine"
+	"kube-cost-workspace/core/engine"
 )
 
 // ConvertDeploymentWithAutoscaler converts a Deployment manifest and attaches the

@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/costseries"
-	clustermode "kube-budget/internal/application/cluster"
-	costexplorermode "kube-budget/internal/application/costexplorer"
-	"kube-budget/internal/providers"
-	"kube-budget/internal/storage/budget"
-	"kube-budget/internal/storage/costhistory"
-	"kube-budget/internal/storage/recommendations"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/costseries"
+	clustermode "kube-cost-workspace/internal/application/cluster"
+	costexplorermode "kube-cost-workspace/internal/application/costexplorer"
+	"kube-cost-workspace/internal/providers"
+	"kube-cost-workspace/internal/storage/budget"
+	"kube-cost-workspace/internal/storage/costhistory"
+	"kube-cost-workspace/internal/storage/recommendations"
 )
 
 // CostReportResult pairs the cost report with the recommendations derived

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kube-budget/core/costmodel"
+	"kube-cost-workspace/core/costmodel"
 )
 
 // metricsServerManifest is the upstream install manifest of metrics-server.

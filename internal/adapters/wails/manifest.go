@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"kube-budget/core/costmodel"
-	manifestmode "kube-budget/internal/application/manifest"
-	"kube-budget/internal/providers"
+	"kube-cost-workspace/core/costmodel"
+	manifestmode "kube-cost-workspace/internal/application/manifest"
+	"kube-cost-workspace/internal/providers"
 )
 
 // ManifestAdapter exposes Manifest Mode to the desktop frontend.

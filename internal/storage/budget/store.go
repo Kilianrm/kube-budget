@@ -34,7 +34,7 @@ func DefaultPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("budget: resolve config directory: %w", err)
 	}
-	return filepath.Join(configDir, "kube-budget", "budgets.json"), nil
+	return filepath.Join(configDir, "kube-cost-workspace", "budgets.json"), nil
 }
 
 // Get returns a cluster's budget and whether one is set.

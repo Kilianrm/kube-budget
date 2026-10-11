@@ -15,13 +15,13 @@ func kubeconfigWith(cluster string, exec *clientcmdapi.ExecConfig) *clientcmdapi
 
 func TestEKSTargetIsReadFromTheAWSGetTokenExec(t *testing.T) {
 	// what `aws eks update-kubeconfig` writes
-	config := kubeconfigWith("arn:aws:eks:us-east-1:111122223333:cluster/kube-budget-showcase", &clientcmdapi.ExecConfig{
+	config := kubeconfigWith("arn:aws:eks:us-east-1:111122223333:cluster/kube-cost-workspace-showcase", &clientcmdapi.ExecConfig{
 		Command: "aws",
-		Args:    []string{"--region", "us-east-1", "eks", "get-token", "--cluster-name", "kube-budget-showcase", "--output", "json"},
+		Args:    []string{"--region", "us-east-1", "eks", "get-token", "--cluster-name", "kube-cost-workspace-showcase", "--output", "json"},
 		Env:     []clientcmdapi.ExecEnvVar{{Name: "AWS_PROFILE", Value: "default"}},
 	})
 	target, ok := eksTargetFor(config, "ctx")
-	if !ok || target != (eksTarget{ClusterName: "kube-budget-showcase", Region: "us-east-1", Profile: "default"}) {
+	if !ok || target != (eksTarget{ClusterName: "kube-cost-workspace-showcase", Region: "us-east-1", Profile: "default"}) {
 		t.Errorf("eksTargetFor() = %+v, %v; want the showcase with the default profile", target, ok)
 	}
 

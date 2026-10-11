@@ -1,259 +1,194 @@
-# KubeBudget
+# Kube Cost Workspace
 
-KubeBudget is a Kubernetes cost-estimation project built in Go.
+*The Kubernetes cost and capacity workspace.*
 
-The project currently focuses on a reusable cost engine that estimates how much a Kubernetes workload will cost. Integrations such as a CLI plugin, GitHub Actions, and a Kubernetes admission webhook are future consumers of the engine.
+**A local desktop workspace for Kubernetes cost: check what a manifest will cost before you deploy it, see what your cluster runs and what it bills, and get a costed plan to cut that bill.**
 
-The current MVP is intentionally narrow: build and test the cost estimation core in Go.
+Kube Cost Workspace is a Go + React desktop app (built with [Wails](https://wails.io)). It connects to your clusters with your own kubeconfig or AWS CLI session. It never stores cloud keys or Kubernetes tokens, and it never changes the cluster: every change it suggests is a command you review and run yourself.
 
-## Why this project
+## What it does
 
-This project is a strong fit for a cloud/platform engineering portfolio because it combines:
-- Kubernetes workload understanding
-- Go development for tooling and controllers
-- cost modeling and FinOps concepts
-- developer-facing CLI UX
-- GitOps and CI/CD awareness
-- future platform enforcement patterns
+The app is organized into three workspaces that share one cost model, so a dollar figure means the same thing everywhere.
 
-## Product direction
+### Manifest: estimate before you deploy
 
-The project will eventually be organized around several components, but only the core is being implemented now:
+- Drop, pick or paste a Deployment manifest and get its requested cost per hour, day and month, with a per-container and per-resource breakdown (CPU, memory, ephemeral storage, GPU).
+- **Catalog pricing**: price it on AWS, GCP or Azure with any supported region and machine type, and toggle between providers to compare them.
+- **Connected-cluster pricing**: price it with the connected cluster's own node rates and simulate the rollout. The simulation shows whether it fits in idle capacity or needs new nodes, whether it is a new workload or an update of an existing one (with current and proposed replicas, requests and cost), and the resulting change to the cluster bill.
+- Generates a context-pinned `kubectl apply` command to copy. Kube Cost Workspace never runs it.
+- Keeps a local history of past estimations, which you can view or export as PDF.
 
-1. Core Engine
-   - the real cost estimation logic
-   - receives workload inputs and pricing rules
-   - returns cost estimate and delta information
+### Cluster: see what is running
 
-2. Future integrations
-   - kubectl-style or standalone command
-   - GitHub Action PR check
-   - Kubernetes admission webhook
+- Connect through any kubeconfig context, or to **Amazon EKS** directly (cluster name + region, with an optional profile or role ARN).
+- **Overview**: cluster health, requested capacity on usable nodes, workloads with missing requests, unready workloads, and the top-requesting namespaces.
+- **Workloads, Resources, Namespaces, Nodes**: a live inventory with readiness, requests and capacity, plus live YAML inspection.
+- **Provider** (EKS): cluster identity, network, managed node groups and add-ons.
+- Reads usage from metrics-server when it is installed, so requested capacity can be compared with actual use.
 
-## Architecture
+### Cost: understand and reduce the bill
 
-KubeBudget is built around a reusable cost engine. The `kubeestimate` CLI is the entry point and supports two estimation modes: manifest-based estimation and cluster-based estimation. Both modes normalize workload data before sending it to the same cost engine.
+Cost figures come from AWS, Google Cloud and Azure public list prices, matched to each node's machine type, region and purchase option (on-demand or spot).
+
+- **Cost explorer**: billed infrastructure (nodes, control plane, volumes) against cost allocated to workloads, plus **idle capacity** (billed but requested by nobody). Allocation can be grouped by namespace or workload, and you can see used vs requested efficiency, cost per node group, and history trends.
+- **Budget & forecast**: set a monthly budget and get a month-end forecast from the recorded cost history, the date the budget runs out, and a "what changed?" breakdown of the drivers between two periods.
+- **Optimizations**: a single plan from today's bill to the optimized bill. It covers orphaned volumes, rightsizing, removing nodes, better machine types and moving stateless work to spot. It is shown as a waterfall where each step only claims the saving it adds. Each recommendation has a risk note and the exact `kubectl`/`aws`/`eksctl` commands. Track it through *apply → confirm* as you run the steps, or dismiss it and the plan recalculates.
+- Export reports as CSV or PDF.
+
+### CLI
+
+`kubeestimate` brings the same engine to the terminal for quick manifest estimates and scripting (see [CLI usage](#cli-usage)).
+
+## How it works
 
 ```mermaid
-flowchart TD
-   CLI["kubeestimate CLI"]
-   ManifestMode["Manifest mode"]
-   ClusterMode["Cluster mode"]
-   Converter["Manifest converter"]
-   Collector["Cluster workload collector"]
-   Core["Core cost engine"]
-   Pricing["Pricing provider and configuration"]
-   Output["Cost summary"]
+flowchart LR
+    subgraph Entry["Entry points"]
+        App["Desktop app<br/>React + Wails bindings"]
+        CLI["kubeestimate CLI"]
+    end
 
-   CLI --> ManifestMode
-   CLI --> ClusterMode
-   ManifestMode --> Converter
-   ClusterMode --> Collector
-   Converter --> Core
-   Collector --> Core
-   Pricing --> Core
-   Core --> Output
+    subgraph Services["Application services"]
+        Manifest["Manifest mode"]
+        Cluster["Cluster mode"]
+        Explorer["Cost explorer"]
+    end
+
+    subgraph Core["Core (pure Go, no I/O)"]
+        Engine["engine<br/>workload → cost"]
+        Model["costmodel · allocation<br/>billed / allocated / idle"]
+        Series["costseries<br/>history · forecast · budget"]
+        Optimize["optimize · whatif<br/>plan · rollout simulation"]
+        Pricing["pricing<br/>AWS · GCP · Azure rate cards"]
+    end
+
+    App --> Manifest & Cluster & Explorer
+    CLI --> Manifest
+    Manifest --> Converter["Manifest converter"]
+    Cluster --> Collector["Kubernetes collector<br/>+ metrics-server, EKS API"]
+    Converter --> Engine
+    Collector --> Model
+    Explorer --> Model & Series & Optimize
+    Pricing --> Engine & Model
 ```
 
-- **Core engine** ? accepts a normalized workload model and calculates cost; it does not parse Kubernetes YAML or call the Kubernetes API.
-- **Manifest converter** ? converts raw manifests into the core's normalized model.
-- **Cluster workload collector** ? queries the Kubernetes API and converts selected live workloads into the same normalized model.
-- **CLI** ? developer-facing entry point that selects a mode and prints cost summaries.
-- **GitHub Action PR check** ? CI-level validation that publishes cost deltas on pull requests.
-- **Admission webhook** ? cluster-native enforcement, planned as a later step.
+- `core/` holds all cost logic and has no Kubernetes, Wails, cloud SDK or file I/O dependencies.
+- Entry points translate input and output only and never reimplement pricing.
+- The app keeps budgets, cost history and recommendation state in your user config directory.
 
-See [docs/architecture.md](docs/architecture.md) for full responsibilities, priority order, and MVP scope per component.
+Design notes: [architecture](docs/architecture.md), [core contract](docs/core-contract.md), [layer contracts](docs/layer-contracts.md), [cost explorer design](docs/cost-explorer-design.md).
 
-## Tech stack
+## Getting started
 
-- Go
-- Kubernetes manifests and resource model
-- YAML parsing for workload evaluation
-- Future integration tooling
+### Desktop app
 
-## Repository structure
-
-The project is organized around a Go core and lightweight integrations:
-
-```text
-kube-budget/
-??? cmd/
-?   ??? kube-budget/
-??? core/
-?   ??? engine/
-?   ??? pricing/
-?   ??? providers/
-?       ??? aws/
-??? docs/
-??? go.mod
-??? README.md
-??? LICENSE
-```
-
-## Project status
-
-Early MVP in active development.
-
-The project is focused on building a useful Kubernetes cost-estimation tool that can evolve into a stronger platform-facing solution.
-
-## CLI
-
-Install the Linux command from the repository root:
-
-```sh
-go install ./cmd/kubeestimate
-```
-
-Add Go's binary directory to your Bash `PATH`, then restart the shell (or run `source ~/.bashrc`):
-
-```sh
-echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-Then estimate a Deployment manifest:
-
-```sh
-kubeestimate deployment.yaml --provider aws --region eu-west-1
-```
-
-For a quick estimate, provide only the manifest. The CLI uses AWS, `us-east-1`, and `m6i.large` on-demand pricing, and prints an advisory for each assumed value:
-
-```sh
-kubeestimate deployment.yaml
-```
-
-Use `--instance-type` when the cluster uses a different worker-node type; it defaults to `m6i.large`:
-
-```sh
-kubeestimate deployment.yaml --provider aws --region eu-west-1 --instance-type c6i.large
-```
-
-The CLI reads CPU, memory, and ephemeral-storage requests from the manifest. It currently supports Deployment manifests and illustrative pricing snapshots for AWS (`us-east-1`, `eu-west-1`), Azure (`eastus`, `westeurope`), and GCP (`us-central1`, `europe-west1`). AWS uses EC2 instance types such as `m6i.large`; Azure uses VM sizes such as `Standard_D2s_v5`; GCP uses Compute Engine machine types such as `e2-standard-2`. The selected worker type is used to derive the cost attributed to requested resources. Output includes hourly and daily USD estimates; the daily total is the hourly total multiplied by 24. AWS region identifiers use hyphens, so use `eu-west-1` rather than `eu-west1`.
-
-Estimate a GKE workload with GCP pricing:
-
-```sh
-kubeestimate deployment.yaml --provider gcp --region us-central1 --instance-type e2-standard-2
-```
-
-For a GCP quick estimate, omit the region and machine type to use `us-central1` and `e2-standard-2`.
-
-Estimate an AKS workload with Azure pricing:
-
-```sh
-kubeestimate deployment.yaml --provider azure --region eastus --instance-type Standard_D2s_v5
-```
-
-For an Azure quick estimate, omit the region and machine type to use `eastus` and `Standard_D2s_v5`.
-
-## Local dashboard
-
-The first dashboard is a React and TypeScript frontend embedded in a Wails desktop application. It accepts one Deployment manifest through file selection, drag and drop, or pasted YAML and displays its hourly, daily, and monthly requested cost. The generated Wails bridge calls the Go manifest adapter, which delegates estimation to the same Manifest Mode application service used by other entry points.
-
-Install the Wails CLI and frontend dependencies:
+Requirements: Go 1.25+, Node.js, and the Wails CLI.
 
 ```sh
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
 cd frontend && npm install && cd ..
 ```
 
-On Ubuntu, install the native desktop dependencies. Ubuntu 24.04 and newer use WebKitGTK 4.1:
+On Ubuntu, install the native dependencies (24.04+ uses WebKitGTK 4.1):
 
 ```sh
 sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
 ```
 
-Start the desktop dashboard from the repository root:
+Run in development mode from the repository root:
 
 ```sh
-wails dev -tags webkit2_41
+wails dev                      # Windows, macOS, WebKitGTK 4.0
+wails dev -tags webkit2_41     # Ubuntu 24.04+
 ```
 
-Use `wails dev` without the tag on systems that provide WebKitGTK 4.0. To work on the visual frontend without launching the desktop shell, run `npm run dev` from `frontend`; cost estimation is only available when the page runs inside Wails.
+Use `wails build` to produce a standalone binary. `npm run dev` inside `frontend/` serves the UI alone; estimation requires the Wails shell.
 
-### Manifest change preview
+### Connecting an EKS cluster
 
-In the Manifest estimator, select **Connected cluster**, add a Deployment YAML,
-and click **Analyze manifest**. Cluster impact automatically matches the
-Deployment by kind, namespace, and name against the collected cost report.
-An omitted namespace resolves to `default`.
+Kube Cost Workspace uses the local AWS CLI and kubeconfig `exec` authentication. You need:
 
-- **New workload**: no matching Deployment was found in the covered namespace.
-- **Update existing workload**: shows current and proposed replica counts,
-   CPU/memory requests per pod, and monthly attributed cost. Simulation replaces
-   the existing requests rather than adding a second copy of the workload.
-- **Workload status unknown**: Deployment collection failed or the namespace was
-   outside the report's scope. Capacity impact assumes additional demand.
+- AWS CLI v2 on the app's `PATH` and an authenticated session (for example `aws sso login --profile company-dev`)
+- `eks:DescribeCluster` on your IAM principal
+- Kubernetes access through an EKS access entry or RBAC
+- VPN or network access to the VPC for private endpoints
 
-This is read-only, steady-state analysis against the report's displayed timestamp,
-not a deployment or a scheduling guarantee. Temporary rollout overlap is excluded;
-existing nodes are retained even when requests decrease. Current attribution uses
-collected node rates, while proposed attribution uses the reference machine's rates.
-Re-run the estimation after refreshing the Cost report to analyze against a newer
-baseline. Catalog pricing remains a standalone estimate and does not check whether
-the workload exists.
+Choose **Amazon EKS** in the connection dialog. Kube Cost Workspace runs `aws eks update-kubeconfig`, creates an `eks/<cluster>/<region>` context and validates it. It never switches your current kubeconfig context.
 
-When the manifest filename and connected kubeconfig context are known, **Apply manifest** includes a
-one-click copy button for a Bash-compatible `kubectl apply` command. It explicitly
-targets that context and the analyzed namespace, includes the configured kubeconfig
-path when present, and references the uploaded filename with `-f`. The command does
-not include the YAML contents. The file must exist in the terminal's current directory
-and contain any changes made in the editor. Pasted YAML without a filename does not
-offer a file-based command. KubeBudget does not execute the command.
+Install metrics-server on the cluster to get the usage, efficiency and rightsizing views.
 
-### Amazon EKS connection MVP
+### Demo clusters
 
-The dashboard supports EKS through the local AWS CLI and kubeconfig `exec` authentication. It does not collect or store AWS access keys, secret keys, or Kubernetes bearer tokens.
+- [k8s-local-cluster-tool/](k8s-local-cluster-tool/): a kind cluster for the Cluster workspace.
+- [k8s-eks-cluster-tool/showcase/](k8s-eks-cluster-tool/showcase/README.md): an EKS cluster built so that every cost and optimization view has a real story to show (about $0.45/h; destroy it after use).
+- [data/manifests/](data/manifests/): sample manifests, valid and invalid.
 
-Prerequisites:
+## CLI usage
 
-- AWS CLI v2 installed and available to the desktop application's `PATH`
-- An authenticated AWS session, for example `aws sso login --profile company-dev`
-- An IAM principal with `eks:DescribeCluster`
-- Kubernetes access to the cluster through an EKS access entry or Kubernetes RBAC
+```sh
+go install ./cmd/kubeestimate
+# make sure $(go env GOPATH)/bin is on your PATH
 
-In the cluster connection dialog, choose **Amazon EKS**, enter the cluster name and region, and optionally provide an AWS profile or role ARN. KubeBudget runs `aws eks update-kubeconfig`, creates an `eks/<cluster>/<region>` context, and then validates that context through the Kubernetes API. Private EKS endpoints still require local VPN or network access to the VPC.
+kubeestimate -f deployment.yaml                                   # AWS, us-east-1, m6i.large
+kubeestimate -f deployment.yaml --provider aws   --region eu-west-1   --instance-type c6i.large
+kubeestimate -f deployment.yaml --provider gcp   --region us-central1 --instance-type e2-standard-2
+kubeestimate -f deployment.yaml --provider azure --region eastus      --instance-type Standard_D2s_v5
+```
 
+Any value you omit falls back to the provider's default, and the CLI prints an advisory for each assumption. Output is hourly and daily USD.
+
+## Current limits
+
+- Manifest mode supports `apps/v1` Deployments, one file at a time.
+- The CLI estimates manifests only. Cluster and cost analysis are only in the desktop app.
+- Prices are bundled list-price snapshots for a set of regions. They do not cover discounts, savings plans, root disks or public IPs.
+- Any cluster can be inspected, but only nodes on AWS, GCP or Azure can be priced. Direct connection and the Provider view exist only for EKS so far.
+- Costs are calculated from requests and node rates. They are an estimate, not your cloud invoice.
 
 ## Roadmap
 
-- [x] Create the repository skeleton
-- [x] Create the initial cost estimation core in Go with support for AWS ( basic prices)
-- [x] Add a converter with support for Kubernetes manifest ( Only Deployment kind)
-- [x] Implement a CLI plugin support.
-- [x] Implement first Wails adapter for UI
-- [x] Implement first dashboard (only manifest mode, one yaml)
-- [x] Add cost estimation support for GCP
-- [x] Add cost estimation support for Azure
-- [x] Add multi-cloud/provider pricing comparisong using a toogler in cost estimation section.
-- [x] Store log and show logs of the previous simulations
-- [x] Implement log old estimations.
-- [x] Implement connection to a real cluster
-- [x] First responsabilities of cluster management approach...
-- [x] Enhance Overview cluster section.
-- [x] Enhance Workloads cluster section.
-- [x] Enhance Namespaces cluster section.
-- [x] Enhance resource cluster section.
-- [x] Enhance Nodes cluster section.
-- [x] Add live YAML workload inspection.
-- [x] Add cluster connection for Providers (EKS oriented)
-- [x] Add monitoring data support for EKS ( AWS Elastic Kubernetes Service )
-- [x] Create change-states local simulator
-- [x] Add cost explorer section in Cost Section
-- [x] Add Budget & forecast section in Cost section.
-- [x] Add optimization section in Cost Section.
-- [x] Create enhanced eks cluster to check cost optimization functionality
-- [x] Add enhanced estimation in manifest mode when cluster from provider is linked.
-- [x] Enhance Manifest section
-- [x] Add .csv/pdf download data feature.
+**Done**
 
-...
-...
-- [ ] Add Kubernetes admission webhook support
-- [ ] Add support to be used in kubectl.
-- [ ] Add a GitHub Action that compares cost deltas in PRs
-...
-- [ ] Add FINAL documentation - design - showcase...
-- [ ] Add explanation of possible future evolving (cluster persistent information, analyzis behaviour, google cluster support, azure cluster support,llm for predict costs...)
+- [x] Core cost engine with AWS, GCP and Azure pricing and provider comparison
+- [x] Manifest converter and `kubeestimate` CLI
+- [x] Desktop app: manifest estimator, estimation history, PDF export
+- [x] Cluster workspace: overview, workloads, resources, namespaces, nodes, live YAML
+- [x] EKS connection, provider metadata and metrics-server usage
+- [x] Cost explorer: billed vs allocated vs idle, by namespace, workload and node group
+- [x] Budget & forecast with change drivers
+- [x] Optimizations plan with apply/confirm tracking
+- [x] Manifest rollout simulation against the connected cluster
+- [x] CSV/PDF export and EKS showcase cluster
 
+**Next**
+
+- [ ] More manifest kinds (StatefulSet, DaemonSet, Job/CronJob), multi-document YAML and folders
+- [ ] `kubectl-cost-workspace` plugin for manifest and cluster estimates (`kubectl cost-workspace estimate -f app.yaml`)
+- [ ] GitHub Action that posts cost deltas on pull requests, with thresholds
+- [ ] Kubernetes admission webhook for cost policy
+- [ ] Direct GKE and AKS connections with provider views
+- [ ] Persistent cluster history and deeper usage analysis
+- [ ] ML/LLM-assisted cost prediction (exploratory)
+- [ ] Final documentation, design write-up and showcase
+
+## Repository layout
+
+```text
+main.go                 Wails desktop entry point
+frontend/               React + TypeScript UI
+cmd/kubeestimate/       CLI
+core/                   pure cost logic: engine, pricing, costmodel, allocation,
+                        costseries, optimize, whatif
+internal/
+  adapters/             Wails bindings and Kubernetes collector
+  application/          manifest, cluster and cost-explorer use cases
+  converter/            manifest → workload
+  providers/            AWS, GCP, Azure catalogs and EKS integration
+  storage/              local budget, cost-history and recommendation stores
+docs/                   architecture and design notes
+k8s-*-cluster-tool/     demo clusters
+```
+
+## License
+
+See [LICENSE](LICENSE).

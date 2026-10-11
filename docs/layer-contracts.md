@@ -1,6 +1,6 @@
 # Layer Contracts
 
-This document defines how data moves between the parts of KubeBudget. It is different from [core-contract.md](core-contract.md), which defines the input and output of the core engine itself.
+This document defines how data moves between the parts of Kube Cost Workspace. It is different from [core-contract.md](core-contract.md), which defines the input and output of the core engine itself.
 
 ## Data flow
 

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"kube-budget/core/costmodel"
+	"kube-cost-workspace/core/costmodel"
 )
 
 func unmountedVolume(name string) costmodel.LineItem {

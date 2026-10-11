@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"kube-budget/core/costmodel"
+	"kube-cost-workspace/core/costmodel"
 )
 
 func newTestStore(t *testing.T) *Store {

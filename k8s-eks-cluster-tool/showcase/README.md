@@ -1,6 +1,6 @@
-# KubeBudget showcase cluster
+# Kube Cost Workspace showcase cluster
 
-A small EKS cluster built so that every KubeBudget view has something real to
+A small EKS cluster built so that every Kube Cost Workspace view has something real to
 show. The basic cluster in `../` runs a handful of lightly requested pods on two
 `t3.medium` nodes, which is already close to the cheapest possible EKS setup,
 so there is little for the platform to find. This one is designed around stories.
@@ -28,11 +28,11 @@ showcase/
 | `platform/node-agent` DaemonSet | Scales with the node count and is left out of the spot estimate |
 | metrics-server | Usage vs requests, efficiency and rightsizing |
 
-All machine types come from the KubeBudget price catalog for `us-east-1`, so
+All machine types come from the Kube Cost Workspace price catalog for `us-east-1`, so
 every node is priced. The two groups use different machine types on purpose:
-KubeBudget matches a node to its group by its `eks.amazonaws.com/nodegroup`
+Kube Cost Workspace matches a node to its group by its `eks.amazonaws.com/nodegroup`
 label, and falls back to the instance type when the label is missing. Connecting
-with the kubeconfig option works too: KubeBudget reads the cluster, region and
+with the kubeconfig option works too: Kube Cost Workspace reads the cluster, region and
 AWS profile from the `aws eks get-token` command in the kubeconfig. The
 spot fallbacks all cost more than `c6i.large` on demand, so the plan still
 proposes `c6i.large` as the better machine type; only the spot node's own price
@@ -43,7 +43,7 @@ moves a little with the type AWS launches.
 About **$0.45 per hour, roughly $10–11 per day** while it runs: the EKS control
 plane ($0.10/h), three `m6i.large` ($0.096/h each), one spot compute node, 60 GiB
 of gp3 volumes, the node root disks and four public IPv4 addresses. There is no
-NAT gateway, which saves about $1 per day. KubeBudget itself reports about
+NAT gateway, which saves about $1 per day. Kube Cost Workspace itself reports about
 $310/month at list prices; it does not price root disks or public IPs.
 
 Create it the day before the interview and destroy it right after.
@@ -74,12 +74,12 @@ it never touches another cluster that happens to be current.
 
 **The day before (history for Budget & forecast and "What changed?")**
 
-KubeBudget records a capture every time the cost report runs, and each
+Kube Cost Workspace records a capture every time the cost report runs, and each
 capture covers up to 90 minutes. "What changed?" compares two windows and
 needs at least an hour of captures in each.
 
-1. `./showcase.sh create`, then connect KubeBudget (Amazon EKS,
-   `kube-budget-showcase`, `us-east-1`).
+1. `./showcase.sh create`, then connect Kube Cost Workspace (Amazon EKS,
+   `kube-cost-workspace-showcase`, `us-east-1`).
 2. Open the Cost section and refresh the report roughly every hour for a few
    hours. Each refresh is one capture.
 3. In Budget & forecast, set a budget of **$250/month**. The forecast lands
@@ -151,7 +151,7 @@ difference between consumption and billed cost.
 **7. Manifest mode: what would deploying this do to the bill?**
 
 In Manifest mode, choose **Connected cluster** and estimate the two files in
-`manifests/`. Nothing is applied to the cluster; KubeBudget simulates it.
+`manifests/`. Nothing is applied to the cluster; Kube Cost Workspace simulates it.
 
 - `fits-in-idle.yaml` (3 × 500m / 512Mi): fits in capacity the cluster already
   pays for, so **+$0 billed**. Idle capacity shrinks, and "Run on 1 fewer node"
@@ -174,7 +174,7 @@ Turn every scenario off before the next run:
 
 ## What the plan should show
 
-A simulation of this cluster through the KubeBudget pipeline, with the EKS
+A simulation of this cluster through the Kube Cost Workspace pipeline, with the EKS
 add-ons exactly as AWS ships them, gives roughly **$310 → $132 per month**:
 
 | Step | Saving / month |

@@ -207,7 +207,7 @@ async function downloadEstimationPdf(estimation: SavedEstimation) {
   const safeId = estimation.id.replace(/[^a-zA-Z0-9_-]+/g, "-") || "record";
   try {
     const pdf = await createEstimationPdf(estimation);
-    pdf.save(`kubebudget-${safeName}-${safeId}.pdf`);
+    pdf.save(`kube-cost-workspace-${safeName}-${safeId}.pdf`);
   } catch {
     window.alert("The PDF could not be generated. Please try again.");
   }
@@ -222,8 +222,8 @@ async function downloadFullHistoryPdf(estimations: SavedEstimation[]) {
     }
     if (!pdf) return;
     const date = new Date().toISOString().slice(0, 10);
-    pdf.setProperties({ title: "KubeBudget Historial", subject: "Saved Kubernetes cost estimations", creator: "KubeBudget" });
-    pdf.save(`kubebudget-historial-${date}.pdf`);
+    pdf.setProperties({ title: "Kube Cost Workspace Historial", subject: "Saved Kubernetes cost estimations", creator: "Kube Cost Workspace" });
+    pdf.save(`kube-cost-workspace-historial-${date}.pdf`);
   } catch {
     window.alert("The history PDF could not be generated. Please try again.");
   }
@@ -265,11 +265,11 @@ export async function createEstimationPdf(estimation: SavedEstimation, existingP
     cursorY = ((pdf as JsPDFDocument & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? cursorY) + 8;
   };
 
-  pdf.setProperties({ title: `KubeBudget estimation - ${workload.name}`, subject: "Saved Kubernetes workload cost estimation", creator: "KubeBudget" });
+  pdf.setProperties({ title: `Kube Cost Workspace estimation - ${workload.name}`, subject: "Saved Kubernetes workload cost estimation", creator: "Kube Cost Workspace" });
   pdf.setFont("helvetica", "bold");
   pdf.setFontSize(19);
   pdf.setTextColor(23, 37, 31);
-  pdf.text("KubeBudget estimation", margin, cursorY);
+  pdf.text("Kube Cost Workspace estimation", margin, cursorY);
   cursorY += 8;
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(10);

@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/costseries"
-	"kube-budget/core/optimize"
-	clustermode "kube-budget/internal/application/cluster"
-	"kube-budget/internal/providers"
-	"kube-budget/internal/storage/costhistory"
-	"kube-budget/internal/storage/recommendations"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/costseries"
+	"kube-cost-workspace/core/optimize"
+	clustermode "kube-cost-workspace/internal/application/cluster"
+	"kube-cost-workspace/internal/providers"
+	"kube-cost-workspace/internal/storage/costhistory"
+	"kube-cost-workspace/internal/storage/recommendations"
 )
 
 func TestPricingProviderNameDerivesCatalogFromClusterProvider(t *testing.T) {

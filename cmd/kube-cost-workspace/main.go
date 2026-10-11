@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"log"
 
-	"kube-budget/core/engine"
-	"kube-budget/core/pricing"
-	"kube-budget/internal/providers/aws"
+	"kube-cost-workspace/core/engine"
+	"kube-cost-workspace/core/pricing"
+	"kube-cost-workspace/internal/providers/aws"
 )
 
 func main() {

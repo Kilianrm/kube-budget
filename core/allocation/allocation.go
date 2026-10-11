@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/pricing"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/pricing"
 )
 
 // SKUControlPlane is the reserved SKU used to price a managed control plane.

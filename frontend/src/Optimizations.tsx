@@ -468,7 +468,7 @@ function DoneView({ confirmed, history, claimable, currency, busy, onClaim }: { 
                   <td>{formatDateTime(event.at)}</td>
                   <td className="numeric-cell">{event.savings.monthly > 0 ? `${formatMoney(event.savings.monthly, currency)}/mo` : "-"}</td>
                   <td className="numeric-cell">
-                    <button type="button" className="secondary-button" disabled={busy === event.id} onClick={() => onClaim(event.id)} title="The change was yours, made outside KubeBudget: record it as applied with the saving it had">
+                    <button type="button" className="secondary-button" disabled={busy === event.id} onClick={() => onClaim(event.id)} title="The change was yours, made outside Kube Cost Workspace: record it as applied with the saving it had">
                       <Check size={13} /> Record as applied
                     </button>
                   </td>
@@ -515,7 +515,7 @@ function ConfirmedRow({ entry, currency }: { entry: AppliedRecommendation; curre
     <>
       <tr className="expandable-row" onClick={() => setOpen(!open)} aria-expanded={open}>
         <td><span className="row-toggle">{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<strong>{entry.title}</strong></span></td>
-        <td>{formatDateTime(entry.at)}{entry.unmarked && <span className="chip history-neutral outside-chip" title="Recorded as applied after it disappeared: the change was made outside KubeBudget. The time is when a report last detected it.">Outside KubeBudget</span>}</td>
+        <td>{formatDateTime(entry.at)}{entry.unmarked && <span className="chip history-neutral outside-chip" title="Recorded as applied after it disappeared: the change was made outside Kube Cost Workspace. The time is when a report last detected it.">Outside Kube Cost Workspace</span>}</td>
         <td>{entry.confirmedAt ? formatDateTime(entry.confirmedAt) : "-"}</td>
         <td className="numeric-cell">−{formatMoney(entry.expected.monthly, currency)}/mo</td>
         <td className="numeric-cell">{Math.abs(realized) < 0.005 ? "No change" : `${realized > 0 ? "−" : "+"}${formatMoney(Math.abs(realized), currency)}/mo`}</td>
@@ -540,7 +540,7 @@ function ConfirmedRow({ entry, currency }: { entry: AppliedRecommendation; curre
 const actionLabels: Record<string, { label: string; tone: string }> = {
   applied: { label: "Started applying", tone: "applied" },
   confirmed: { label: "Confirmed", tone: "confirmed" },
-  resolved: { label: "Resolved outside KubeBudget", tone: "confirmed" },
+  resolved: { label: "Resolved outside Kube Cost Workspace", tone: "confirmed" },
   "item-done": { label: "Resource done", tone: "confirmed" },
   gone: { label: "No longer detected", tone: "neutral" },
   returned: { label: "Detected again", tone: "neutral" },

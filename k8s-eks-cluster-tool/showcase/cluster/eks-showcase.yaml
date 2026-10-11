@@ -1,10 +1,10 @@
-# KubeBudget showcase cluster.
+# Kube Cost Workspace showcase cluster.
 #
-# Every choice here exists to give a KubeBudget view something to show:
+# Every choice here exists to give a Kube Cost Workspace view something to show:
 #   - two node groups with different machine types and purchase options, so the
 #     explorer splits billed cost by node group and the plan sees on-demand and
 #     spot capacity side by side;
-#   - machine types from the KubeBudget price catalog (us-east-1), so every node
+#   - machine types from the Kube Cost Workspace price catalog (us-east-1), so every node
 #     is priced;
 #   - memory-rich m6i nodes under CPU-heavy requests, so the node-type step has
 #     a better fit (c6i) to propose;
@@ -12,17 +12,17 @@
 #     type has no spot capacity. All cost more than c6i.large on demand, so the
 #     node-type step still proposes c6i.large.
 #
-# The two groups use different instance types on purpose: KubeBudget matches a
+# The two groups use different instance types on purpose: Kube Cost Workspace matches a
 # node to its group by its eks.amazonaws.com/nodegroup label, and falls back to
 # the instance type when a node has no such label.
 apiVersion: eksctl.io/v1alpha5
 kind: ClusterConfig
 
 metadata:
-  name: kube-budget-showcase
+  name: kube-cost-workspace-showcase
   region: us-east-1
   tags:
-    project: kube-budget
+    project: kube-cost-workspace
     purpose: showcase
 
 accessConfig:

@@ -2,9 +2,9 @@
 package manifest
 
 import (
-	"kube-budget/core/engine"
-	"kube-budget/core/pricing"
-	"kube-budget/internal/converter"
+	"kube-cost-workspace/core/engine"
+	"kube-cost-workspace/core/pricing"
+	"kube-cost-workspace/internal/converter"
 )
 
 // Result contains the normalized workload and its cost estimate.

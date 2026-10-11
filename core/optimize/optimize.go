@@ -11,8 +11,9 @@
 package optimize
 
 import (
-	"kube-budget/core/costmodel"
 	"math"
+
+	"kube-cost-workspace/core/costmodel"
 )
 
 // Category groups recommendations by where the change is made.

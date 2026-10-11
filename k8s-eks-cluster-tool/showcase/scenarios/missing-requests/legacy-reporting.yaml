@@ -1,4 +1,4 @@
-# Scenario: a workload without resource requests. KubeBudget cannot attribute
+# Scenario: a workload without resource requests. Kube Cost Workspace cannot attribute
 # its cost, lists it under "Fix first" in Optimizations, and holds back the
 # node-level steps until it is fixed. Turn it on and off with:
 #   ./showcase.sh scenario missing-requests on|off
@@ -7,7 +7,7 @@ kind: Namespace
 metadata:
   name: legacy
   labels:
-    purpose: kube-budget-showcase
+    purpose: kube-cost-workspace-showcase
 ---
 apiVersion: apps/v1
 kind: Deployment

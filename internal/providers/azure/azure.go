@@ -2,8 +2,8 @@
 package azure
 
 import (
-	"kube-budget/core/pricing"
-	"kube-budget/internal/providers/catalog"
+	"kube-cost-workspace/core/pricing"
+	"kube-cost-workspace/internal/providers/catalog"
 )
 
 // Provider implements the shared pricing-provider contract for Azure.

@@ -135,9 +135,9 @@ The deployment includes a Namespace, ConfigMap, Secret, Deployment, Services, St
 
 The Secret contains demo credentials only. Do not use these values in a real environment.
 
-## Connect KubeBudget
+## Connect Kube Cost Workspace
 
-Use the KubeBudget cluster connection dialog with:
+Use the Kube Cost Workspace cluster connection dialog with:
 
 - Connection source: `Amazon EKS`
 - Cluster name: `cluster-to-be-monitorized`

@@ -261,7 +261,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
             <p>
               {clusterConnection
                 ? "View and manage your cluster connection"
-                : "Configure the credentials KubeBudget will use to inspect live workloads"}
+                : "Configure the credentials Kube Cost Workspace will use to inspect live workloads"}
             </p>
           </div>
           <button type="button" className="modal-close-button" onClick={handleClose} aria-label="Close modal">
@@ -492,7 +492,7 @@ export function ConnectionModal({ isOpen, onClose }: ConnectionModalProps) {
                     </label>
                     <label className="form-field full-width">
                       <span>Assume role ARN (optional)</span>
-                      <input value={roleArn} onChange={(e) => setRoleArn(e.target.value)} placeholder="arn:aws:iam::123456789012:role/KubeBudgetViewer" />
+                      <input value={roleArn} onChange={(e) => setRoleArn(e.target.value)} placeholder="arn:aws:iam::123456789012:role/KubeCostWorkspaceViewer" />
                     </label>
                     <p className="form-hint">Requires AWS CLI v2 and an active AWS SSO or IAM session.</p>
                   </>

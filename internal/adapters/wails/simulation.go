@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
-	"kube-budget/core/costmodel"
-	"kube-budget/core/optimize"
-	"kube-budget/core/pricing"
-	"kube-budget/core/whatif"
-	manifestmode "kube-budget/internal/application/manifest"
-	"kube-budget/internal/providers"
+	"kube-cost-workspace/core/costmodel"
+	"kube-cost-workspace/core/optimize"
+	"kube-cost-workspace/core/pricing"
+	"kube-cost-workspace/core/whatif"
+	manifestmode "kube-cost-workspace/internal/application/manifest"
+	"kube-cost-workspace/internal/providers"
 )
 
 // SimulationRequest asks what deploying a manifest does to a connected cluster.

@@ -285,7 +285,7 @@ function AppContent() {
             {activeSection === "estimate" ? <CircleDollarSign size={21} /> : activeSection === "cluster" ? <Network size={21} /> : <Lightbulb size={21} />}
           </div>
           <div>
-            <strong>KubeBudget</strong>
+            <strong>Kube Cost Workspace</strong>
             <span>{activeSection === "estimate" ? "Manifest workspace" : activeSection === "cluster" ? "Cluster workspace" : "Cost workspace"}</span>
           </div>
         </div>
@@ -497,7 +497,7 @@ function AppContent() {
               }}>
                 <summary className="secondary-button"><Terminal size={14} /> Apply manifest <ChevronDown size={14} /></summary>
                 <section className="manifest-apply-command" aria-label="Apply manifest command">
-                  <p className="manifest-baseline">{clusterConnection?.name} / {simulation.impact.workload.namespace} / Bash-compatible shell. Not executed by KubeBudget.</p>
+                  <p className="manifest-baseline">{clusterConnection?.name} / {simulation.impact.workload.namespace} / Bash-compatible shell. Not executed by Kube Cost Workspace.</p>
                   <CopyCommand command={applyCommand} />
                   <div className="budget-alert" role="note" aria-label="Namespace prerequisite"><AlertCircle size={15} /><span>If namespace "{simulation.impact.workload.namespace}" does not exist, this command will fail. Namespace existence is not checked.</span></div>
                   <p className="manifest-baseline">File path is relative to your terminal directory. The local file must contain the analyzed changes.</p>

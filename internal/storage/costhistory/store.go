@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"kube-budget/core/costmodel"
+	"kube-cost-workspace/core/costmodel"
 )
 
 // SchemaVersion guards stored records against model changes. Records written
@@ -61,7 +61,7 @@ func DefaultPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cost history: resolve config directory: %w", err)
 	}
-	return filepath.Join(configDir, "kube-budget", "cost-history.ndjson"), nil
+	return filepath.Join(configDir, "kube-cost-workspace", "cost-history.ndjson"), nil
 }
 
 // ClusterID builds a stable key for a report scope.

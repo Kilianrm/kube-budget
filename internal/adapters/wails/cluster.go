@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	kubernetesadapter "kube-budget/internal/adapters/kubernetes"
-	clustermode "kube-budget/internal/application/cluster"
-	awsprovider "kube-budget/internal/providers/aws"
+	kubernetesadapter "kube-cost-workspace/internal/adapters/kubernetes"
+	clustermode "kube-cost-workspace/internal/application/cluster"
+	awsprovider "kube-cost-workspace/internal/providers/aws"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"

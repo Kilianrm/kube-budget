@@ -1,6 +1,6 @@
 package engine
 
-import "kube-budget/core/pricing"
+import "kube-cost-workspace/core/pricing"
 
 // Workload represents a Kubernetes workload that the estimator can evaluate.
 type Workload struct {

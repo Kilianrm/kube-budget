@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"kube-budget/core/costmodel"
-	clustermode "kube-budget/internal/application/cluster"
+	"kube-cost-workspace/core/costmodel"
+	clustermode "kube-cost-workspace/internal/application/cluster"
 )
 
 func TestConcurrentSnapshotRequestsShareOneCollection(t *testing.T) {
