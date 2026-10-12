@@ -137,11 +137,11 @@ kubeestimate help
 
 | Command | What it does |
 |---|---|
-| `manifest -f app.yaml` | Estimates what a Deployment's requests cost at a provider's list prices. No cluster needed. |
+| `manifest -f app.yaml` | Estimates a Deployment with a provider's list prices. No cluster needed. |
 | `contexts` | Lists the kubeconfig contexts with a number and a short name (the EKS cluster name for ARN and eksctl contexts), and marks the current one. |
 | `cluster` | Summarizes a cluster: platform, nodes, namespaces, request coverage and warnings. `--workloads` lists every workload. |
 | `cost` | Prices a cluster: billed, requested, idle and shared cost, broken down `--by namespace`, `workload` or `nodegroup`, plus this month's forecast and budget. |
-| `simulate -f app.yaml` | Shows how deploying a manifest changes a real cluster's bill, which can rise by more than the workload's own cost (new nodes) or not at all (idle capacity): bill before and after, placement, new nodes, idle capacity, optimization plan and month forecast. |
+| `simulate -f app.yaml` | Shows what deploying a manifest does to the cluster: bill before and after, placement, new nodes, idle capacity, optimization plan and month forecast. |
 
 ```sh
 # Manifest estimates (no cluster needed)
@@ -191,11 +191,11 @@ kubeestimate cost -o json | jq '.report.totals.provisioned.monthly'
 
 **Next**
 - [x] CLI cluster commands: contexts, cluster summary, cost report and rollout simulation
-- [ ] Final documentation, design write-up and showcase
+- [ ] Final documentation, design write-up...
 
 Additions for the future:
 - [ ] More manifest kinds (StatefulSet, DaemonSet, Job/CronJob), multi-document YAML and folders
-- [ ] More manifest kinds (StatefulSet, DaemonSet, Job/CronJob), multi-document YAML and folders
+- [ ] Support por AKS and GKE clusters
 - [ ] ML/LLM-assisted cost prediction (exploratory)
 
 ## Repository layout
