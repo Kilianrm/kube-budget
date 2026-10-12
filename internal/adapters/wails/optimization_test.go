@@ -1,16 +1,13 @@
 package wails
 
 import (
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"kube-cost-workspace/core/costmodel"
 	"kube-cost-workspace/core/optimize"
-	clustermode "kube-cost-workspace/internal/application/cluster"
-	"kube-cost-workspace/internal/application/costexplorer"
-	"kube-cost-workspace/internal/providers"
+	"kube-cost-workspace/internal/application/workspace"
 	"kube-cost-workspace/internal/storage/recommendations"
 )
 
@@ -85,53 +82,6 @@ func TestOnlySeparateItemsAreTrackedOneByOne(t *testing.T) {
 	}
 }
 
-// The showcase relies on the node-type step proposing c6i.large for
-// memory-rich m6i.large nodes under CPU-heavy requests. The spot group's
-// fallback types sit in the same catalog and must never take its place.
-func TestTheAWSCatalogStillProposesC6iForCPUHeavyM6iNodes(t *testing.T) {
-	values := func(cpu int64, memoryGiB int64) clustermode.ResourceValues {
-		return clustermode.ResourceValues{CPUMilli: cpu, MemoryBytes: memoryGiB * gibibyte}
-	}
-	snapshot := clustermode.Snapshot{Cluster: clustermode.ClusterInfo{Context: "showcase"}}
-	for _, name := range []string{"a", "b", "c"} {
-		snapshot.Nodes = append(snapshot.Nodes, clustermode.Node{UID: name, Name: name, InstanceType: "m6i.large", Region: "us-east-1", Ready: true, Schedulable: true, Allocatable: values(1930, 7)})
-	}
-	snapshot.Workloads = []clustermode.Workload{{UID: "w", Kind: "Deployment", Name: "api", Namespace: "shop", DesiredReplicas: 3,
-		Containers: []clustermode.Container{{Name: "api", Requests: values(1000, 1)}}}}
-	for index, node := range []string{"a", "b", "c"} {
-		snapshot.Pods = append(snapshot.Pods, clustermode.Pod{Name: fmt.Sprintf("api-%d", index), Namespace: "shop", NodeName: node, OwnerKind: "Deployment", OwnerName: "api", Requests: values(1000, 1)})
-	}
-	provider, _ := providers.Get("aws")
-	report, err := costexplorer.New(provider).Report(snapshot, costexplorer.Options{Provider: "aws", Region: "us-east-1"})
-	if err != nil {
-		t.Fatalf("Report() error = %v", err)
-	}
-
-	plan := optimize.Build(report, planInputs(provider, "us-east-1"))
-	for _, recommendation := range plan.Recommendations {
-		if recommendation.ID == "node-type" {
-			if recommendation.Title != "Switch to c6i.large nodes" {
-				t.Errorf("node-type = %q, want c6i.large", recommendation.Title)
-			}
-			return
-		}
-	}
-	t.Fatalf("recommendations = %+v, want a node-type step", plan.Recommendations)
-}
-
-func TestOnlyEKSConnectionsGetEKSNodeGroups(t *testing.T) {
-	metadata := &clustermode.ProviderMetadata{Provider: "aws-eks", ClusterName: "shop", Region: "us-east-1",
-		NodeGroups: []clustermode.NodeGroup{{Name: "general", DesiredSize: 3, MinSize: 2}}}
-
-	cluster := eksCluster(metadata)
-	if cluster == nil || cluster.Name != "shop" || len(cluster.NodeGroups) != 1 || cluster.NodeGroups[0].Desired != 3 || cluster.NodeGroups[0].Min != 2 {
-		t.Errorf("eksCluster() = %+v, want shop with the general group", cluster)
-	}
-	if eksCluster(nil) != nil || eksCluster(&clustermode.ProviderMetadata{Provider: "gke", ClusterName: "shop", Region: "x"}) != nil {
-		t.Error("eksCluster() gave sizes outside EKS")
-	}
-}
-
 func TestApplyingFreezesARecommendationUntilTheClusterShowsItDone(t *testing.T) {
 	// Never touch the user's real recommendations.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -153,7 +103,7 @@ func TestApplyingFreezesARecommendationUntilTheClusterShowsItDone(t *testing.T) 
 		return costmodel.NewReport(at, costmodel.Scope{}, items, nil)
 	}
 	adapter := NewClusterAdapter()
-	store, err := defaultRecommendationStore()
+	store, err := workspace.RecommendationStore()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,19 +1,13 @@
 package wails
 
 import (
-	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"time"
 
 	"kube-cost-workspace/core/costmodel"
 	"kube-cost-workspace/core/costseries"
-	clustermode "kube-cost-workspace/internal/application/cluster"
-	costexplorermode "kube-cost-workspace/internal/application/costexplorer"
-	"kube-cost-workspace/internal/providers"
-	"kube-cost-workspace/internal/storage/budget"
-	"kube-cost-workspace/internal/storage/costhistory"
+	"kube-cost-workspace/internal/application/workspace"
 	"kube-cost-workspace/internal/storage/recommendations"
 )
 
@@ -93,54 +87,32 @@ func (adapter *ClusterAdapter) GetCostReport(request CostReportRequest) (CostRep
 		return CostReportResult{}, err
 	}
 
-	// An explicit pricing provider wins; otherwise the cluster's platform,
-	// detected from its nodes, picks the price list.
-	providerName := strings.ToLower(strings.TrimSpace(request.PricingProvider))
-	region := strings.TrimSpace(request.PricingRegion)
-	if providerName == "" {
-		if !snapshot.Platform.Supported {
-			return CostReportResult{}, fmt.Errorf("cost report: this cluster cannot be priced: %s", snapshot.Platform.Reason)
-		}
-		providerName = snapshot.Platform.Provider
-	}
-	if region == "" {
-		region = snapshot.Platform.Region
-	}
-	selectedProvider, ok := providers.Get(providerName)
-	if !ok {
-		return CostReportResult{}, fmt.Errorf("cost report: unsupported pricing provider %q; supported providers: %s", providerName, strings.Join(providers.Names(), ", "))
-	}
-
-	report, err := costexplorermode.New(selectedProvider).Report(snapshot, costexplorermode.Options{
-		Provider:   selectedProvider.Name(),
-		Region:     selectedProvider.NormalizeRegion(region),
-		PricingSKU: strings.TrimSpace(request.InstanceType),
-		Namespace:  collectionNamespace(request.Namespace),
+	priced, err := workspace.Price(snapshot, workspace.PriceOptions{
+		Provider:     request.PricingProvider,
+		Region:       request.PricingRegion,
+		InstanceType: request.InstanceType,
+		Namespace:    request.Namespace,
 	})
 	if err != nil {
 		return CostReportResult{}, err
 	}
-
-	clusterID := costhistory.ClusterID(report.Scope)
-	inputs := planInputs(selectedProvider, report.Scope.Region)
-	inputs.EKS = eksCluster(snapshot.Provider)
-	inputs.NodeTransition = nodeTransition(snapshot.Provider)
-	adapter.rememberCost(clusterID, report, inputs)
+	report, clusterID := priced.Report, priced.ClusterID
+	adapter.rememberCost(clusterID, report, priced.Plan)
 
 	result := CostReportResult{Report: report, ClusterID: clusterID}
-	store, err := defaultRecommendationStore()
+	store, err := workspace.RecommendationStore()
 	if err == nil {
-		result.Optimization, err = optimization(store, clusterID, report, inputs)
+		result.Optimization, err = optimization(store, clusterID, report, priced.Plan)
 	}
 	if err != nil {
 		// The plan still works without the user's dismissals and journal.
-		result.Optimization = optimizationFrom(recommendations.State{}, report, inputs)
+		result.Optimization = optimizationFrom(recommendations.State{}, report, priced.Plan)
 		result.Report.Warnings = append(result.Report.Warnings, costmodel.Warning{Code: "recommendations-unavailable", Message: err.Error()})
 	}
 	if !adapter.captureDue(clusterID, report, time.Now()) {
 		return result, nil
 	}
-	if err := recordCostHistory(report); err != nil {
+	if err := workspace.RecordHistory(report, time.Now()); err != nil {
 		// Not written, so the next report tries again.
 		adapter.captureMutex.Lock()
 		delete(adapter.lastCaptures, clusterID)
@@ -156,136 +128,35 @@ func (adapter *ClusterAdapter) GetCostReport(request CostReportRequest) (CostRep
 // GetCostTrend integrates the recorded captures into spend over time. Periods
 // without captures are returned as gaps, never interpolated.
 func (adapter *ClusterAdapter) GetCostTrend(request CostTrendRequest) (CostTrendResult, error) {
-	days := request.Days
-	if days <= 0 {
-		days = 7
-	}
 	bucket := costseries.BucketHour
 	if strings.EqualFold(request.Bucket, string(costseries.BucketDay)) {
 		bucket = costseries.BucketDay
 	}
-
-	store, err := defaultCostHistoryStore()
-	if err != nil {
-		return CostTrendResult{}, err
-	}
-
 	// Local time, so day buckets follow the user's calendar.
-	to := time.Now()
-	from := to.AddDate(0, 0, -days)
-	previousFrom := from.AddDate(0, 0, -days)
-	records, err := store.Range(strings.TrimSpace(request.ClusterID), previousFrom, to)
+	trend, err := workspace.SpendTrend(request.ClusterID, request.Days, bucket, time.Now())
 	if err != nil {
 		return CostTrendResult{}, err
 	}
-
-	samples := make([]costseries.Sample, 0, len(records))
-	currency := costmodel.CurrencyUSD
-	for _, record := range records {
-		if record.Currency != "" {
-			currency = record.Currency
-		}
-		samples = append(samples, sampleFromRecord(record))
-	}
-
-	series := costseries.Build(samples, from, to, bucket, costseries.DefaultMaxGap)
-	series.Currency = currency
-	previous := costseries.Build(samples, previousFrom, from, bucket, costseries.DefaultMaxGap)
-	return CostTrendResult{Series: series, Previous: previous.Summary(), Drivers: costseries.Drivers(series, previous)}, nil
+	return CostTrendResult{Series: trend.Series, Previous: trend.Previous, Drivers: trend.Drivers}, nil
 }
 
 // GetCostForecast projects the current month's spend and compares it with the
 // cluster's budget.
 func (adapter *ClusterAdapter) GetCostForecast(request CostForecastRequest) (CostForecastResult, error) {
-	inputs, err := loadForecastInputs(strings.TrimSpace(request.ClusterID), time.Now())
+	inputs, err := workspace.LoadForecast(request.ClusterID, time.Now())
 	if err != nil {
 		return CostForecastResult{}, err
 	}
-	return inputs.forecast(request.RunRateHourly), nil
-}
-
-// forecastInputs is the recorded month and the budget of one cluster, loaded
-// once so several run rates can be forecast against them.
-type forecastInputs struct {
-	records       []costhistory.Record
-	now           time.Time
-	monthlyBudget float64
-}
-
-func loadForecastInputs(clusterID string, now time.Time) (forecastInputs, error) {
-	history, err := defaultCostHistoryStore()
-	if err != nil {
-		return forecastInputs{}, err
-	}
-	budgets, err := defaultBudgetStore()
-	if err != nil {
-		return forecastInputs{}, err
-	}
-
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	// A capture just before the month still covers its first hour.
-	records, err := history.Range(clusterID, monthStart.Add(-costseries.DefaultMaxGap), now)
-	if err != nil {
-		return forecastInputs{}, err
-	}
-	stored, ok, err := budgets.Get(clusterID)
-	if err != nil {
-		return forecastInputs{}, err
-	}
-	inputs := forecastInputs{records: records, now: now}
-	if ok {
-		inputs.monthlyBudget = stored.MonthlyUSD
-	}
-	return inputs, nil
-}
-
-func (inputs forecastInputs) forecast(runRateHourly float64) CostForecastResult {
-	return forecastResult(inputs.records, inputs.now, runRateHourly, inputs.monthlyBudget)
-}
-
-// withRunRateChange re-forecasts after a change that starts now, with the
-// budget evaluated against the new total.
-func (inputs forecastInputs) withRunRateChange(before CostForecastResult, deltaHourly float64) CostForecastResult {
-	after := CostForecastResult{Forecast: before.Forecast.WithRunRateChange(deltaHourly)}
-	if inputs.monthlyBudget > 0 {
-		status := costseries.EvaluateBudget(after.Forecast, inputs.monthlyBudget)
-		after.Budget = &status
-	}
-	return after
+	return forecastResult(inputs.Forecast(request.RunRateHourly)), nil
 }
 
 // SetCostBudget stores or removes a cluster's monthly budget.
 func (adapter *ClusterAdapter) SetCostBudget(request CostBudgetRequest) error {
-	budgets, err := defaultBudgetStore()
-	if err != nil {
-		return err
-	}
-	return budgets.Set(strings.TrimSpace(request.ClusterID), request.MonthlyUSD, time.Now())
+	return workspace.SetBudget(request.ClusterID, request.MonthlyUSD, time.Now())
 }
 
-func forecastResult(records []costhistory.Record, now time.Time, runRateHourly, monthlyBudget float64) CostForecastResult {
-	samples := make([]costseries.Sample, 0, len(records))
-	for _, record := range records {
-		samples = append(samples, sampleFromRecord(record))
-	}
-	result := CostForecastResult{Forecast: costseries.BuildForecast(samples, now, runRateHourly, costseries.DefaultMaxGap)}
-	if monthlyBudget > 0 {
-		status := costseries.EvaluateBudget(result.Forecast, monthlyBudget)
-		result.Budget = &status
-	}
-	return result
-}
-
-func sampleFromRecord(record costhistory.Record) costseries.Sample {
-	return costseries.Sample{
-		At:                record.CapturedAt,
-		ProvisionedHourly: record.HourlyByBasis[string(costmodel.BasisProvisioned)],
-		RequestedHourly:   record.HourlyByBasis[string(costmodel.BasisRequested)],
-		IdleHourly:        record.IdleHourly,
-		SharedHourly:      record.SharedHourly,
-		HourlyByNamespace: record.HourlyByNamespace,
-		HourlyByNodeGroup: record.HourlyByNodeGroup,
-	}
+func forecastResult(forecast workspace.Forecast) CostForecastResult {
+	return CostForecastResult{Forecast: forecast.Forecast, Budget: forecast.Budget}
 }
 
 // historyCaptureSpacing is the least time between two captures of the same
@@ -310,81 +181,4 @@ func (adapter *ClusterAdapter) captureDue(clusterID string, report costmodel.Cos
 	}
 	adapter.lastCaptures[clusterID] = lastCapture{at: now, rate: rate}
 	return true
-}
-
-func recordCostHistory(report costmodel.CostReport) error {
-	store, err := defaultCostHistoryStore()
-	if err != nil {
-		return err
-	}
-	return store.Append(costhistory.FromReport(report, time.Now()))
-}
-
-func defaultBudgetStore() (*budget.Store, error) {
-	path, err := budget.DefaultPath()
-	if err != nil {
-		return nil, err
-	}
-	return budget.New(path), nil
-}
-
-func defaultCostHistoryStore() (*costhistory.Store, error) {
-	path, err := costhistory.DefaultPath()
-	if err != nil {
-		return nil, err
-	}
-	return costhistory.New(path), nil
-}
-
-// pricingProviderName maps a cluster provider such as "aws-eks" onto the
-// pricing catalog of its cloud ("aws").
-func pricingProviderName(provider string) string {
-	name := strings.ToLower(strings.TrimSpace(provider))
-	if index := strings.Index(name, "-"); index > 0 {
-		name = name[:index]
-	}
-	return name
-}
-
-var providerTitles = map[string]string{"aws": "AWS", "gcp": "Google Cloud", "azure": "Azure"}
-
-// clusterPlatform settles which price list a cluster uses. The nodes decide;
-// an EKS connection stands in for nodes that report nothing (no nodes yet).
-// It is supported when that provider's catalog covers the region.
-func clusterPlatform(nodes []clustermode.Node, connectionProvider, connectionRegion string) clustermode.Platform {
-	platform := clustermode.DetectPlatform(nodes)
-	if platform.Detected == "" {
-		if name := pricingProviderName(connectionProvider); name != "" {
-			platform.Provider, platform.Detected = name, name
-		}
-	}
-	if platform.Region == "" {
-		platform.Region = strings.TrimSpace(connectionRegion)
-	}
-
-	selected, ok := providers.Get(platform.Provider)
-	switch {
-	case platform.Detected == "":
-		platform.Reason = "its nodes do not report a cloud provider, so it looks like a local or on-premises cluster, and those have no public price list"
-	case !ok:
-		platform.Reason = fmt.Sprintf("its nodes report %q, which has no public price list; costs can be calculated for clusters on %s", platform.Detected, supportedClouds())
-	case platform.Region == "":
-		platform.Reason = fmt.Sprintf("it runs on %s but its nodes carry no region label, so the regional prices cannot be chosen", providerTitles[platform.Provider])
-	case !slices.Contains(selected.Regions(), selected.NormalizeRegion(platform.Region)):
-		platform.Reason = fmt.Sprintf("it runs on %s in %s, a region the price catalog does not cover yet (covered: %s)", providerTitles[platform.Provider], platform.Region, strings.Join(selected.Regions(), ", "))
-	default:
-		platform.Region = selected.NormalizeRegion(platform.Region)
-		platform.Supported = true
-	}
-	return platform
-}
-
-func supportedClouds() string {
-	names := make([]string, 0, len(providerTitles))
-	for _, name := range providers.Names() {
-		if title, ok := providerTitles[name]; ok {
-			names = append(names, title)
-		}
-	}
-	return strings.Join(names, ", ")
 }

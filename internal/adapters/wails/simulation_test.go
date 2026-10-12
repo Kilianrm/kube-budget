@@ -8,6 +8,7 @@ import (
 	"kube-cost-workspace/core/costmodel"
 	clustermode "kube-cost-workspace/internal/application/cluster"
 	"kube-cost-workspace/internal/application/costexplorer"
+	"kube-cost-workspace/internal/application/workspace"
 	"kube-cost-workspace/internal/providers"
 )
 
@@ -59,7 +60,7 @@ func TestSimulateManifestUsesTheClusterRatesAndItsLastReport(t *testing.T) {
 
 	report := simulationReport(t)
 	provider, _ := providers.Get("aws")
-	adapter.rememberCost("demo", report, planInputs(provider, "us-east-1"))
+	adapter.rememberCost("demo", report, workspace.PlanInputs(provider, "us-east-1"))
 
 	result, err := adapter.SimulateManifest(SimulationRequest{ClusterID: "demo", Document: ManifestDocument{Name: "api.yaml", Content: string(manifest)}})
 	if err != nil {
@@ -92,7 +93,7 @@ func TestSimulateManifestComparesAnExistingDeployment(t *testing.T) {
 	adapter := NewClusterAdapter()
 	report := simulationReport(t)
 	provider, _ := providers.Get("aws")
-	adapter.rememberCost("demo", report, planInputs(provider, "us-east-1"))
+	adapter.rememberCost("demo", report, workspace.PlanInputs(provider, "us-east-1"))
 	manifest := `apiVersion: apps/v1
 kind: Deployment
 metadata:

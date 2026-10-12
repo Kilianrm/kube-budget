@@ -1,4 +1,4 @@
-package wails
+package workspace
 
 import (
 	"path/filepath"

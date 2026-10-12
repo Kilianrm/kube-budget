@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"kube-cost-workspace/core/costmodel"
-	manifestmode "kube-cost-workspace/internal/application/manifest"
+	"kube-cost-workspace/internal/application/workspace"
 	"kube-cost-workspace/internal/providers"
 )
 
@@ -99,23 +99,16 @@ func (adapter *ManifestAdapter) EstimateManifest(request ManifestRequest) (Manif
 		return ManifestResult{}, fmt.Errorf("manifest adapter: instance type is required")
 	}
 
-	estimate, _, err := priceManifest(document.Content, selectedProvider, region, instanceType)
-	return estimate, err
+	estimate, err := workspace.PriceManifest([]byte(document.Content), selectedProvider, region, instanceType)
+	if err != nil {
+		return ManifestResult{}, err
+	}
+	return manifestResult(estimate), nil
 }
 
-// priceManifest estimates a manifest with one provider's rates for one
-// machine type. Catalog pricing and connected-cluster pricing both use it, so
-// the two modes can only differ in the rates they pass.
-func priceManifest(content string, selectedProvider providers.Provider, region, instanceType string) (ManifestResult, manifestmode.Result, error) {
-	config, err := selectedProvider.NewPriceConfig(instanceType, region)
-	if err != nil {
-		return ManifestResult{}, manifestmode.Result{}, err
-	}
-	result, err := manifestmode.New(config).Estimate([]byte(content))
-	if err != nil {
-		return ManifestResult{}, manifestmode.Result{}, err
-	}
-
+// manifestResult shapes a manifest estimate for the frontend.
+func manifestResult(estimate workspace.ManifestEstimate) ManifestResult {
+	result := estimate.Result
 	resources := make([]ResourceResult, 0, len(result.Workload.Resources))
 	for _, resource := range result.Workload.Resources {
 		resources = append(resources, ResourceResult{
@@ -140,9 +133,9 @@ func priceManifest(content string, selectedProvider providers.Provider, region, 
 			Resources:   resources,
 		},
 		Pricing: PricingResult{
-			Provider:     selectedProvider.Name(),
-			Region:       region,
-			InstanceType: instanceType,
+			Provider:     estimate.Provider,
+			Region:       estimate.Region,
+			InstanceType: estimate.InstanceType,
 		},
 		Cost:         cost,
 		HourlyTotal:  cost.Hourly,
@@ -153,7 +146,7 @@ func priceManifest(content string, selectedProvider providers.Provider, region, 
 		MaxTotal:     result.Estimate.MaxTotal,
 		MinCost:      projectBound(result.Estimate.MinTotal),
 		MaxCost:      projectBound(result.Estimate.MaxTotal),
-	}, result, nil
+	}
 }
 
 func projectBound(hourlyUSD *float64) *costmodel.Projection {
