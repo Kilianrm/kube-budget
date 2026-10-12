@@ -37,7 +37,7 @@ Cost figures come from AWS, Google Cloud and Azure public list prices, matched t
 
 ### CLI
 
-`kubeestimate` brings the same engine to the terminal for quick manifest estimates and scripting (see [CLI usage](#cli-usage)).
+`kubeestimate` brings the workspace to the terminal: manifest estimates, a cluster summary, the cost report and the manifest rollout simulation. It uses the same services and local data as the app, and every command can print JSON for scripting (see [CLI usage](#cli-usage)).
 
 ## How it works
 
@@ -49,6 +49,7 @@ flowchart LR
     end
 
     subgraph Services["Application services"]
+        Workspace["Workspace workflows<br/>connect · snapshot · price · simulate"]
         Manifest["Manifest mode"]
         Cluster["Cluster mode"]
         Explorer["Cost explorer"]
@@ -62,8 +63,8 @@ flowchart LR
         Pricing["pricing<br/>AWS · GCP · Azure rate cards"]
     end
 
-    App --> Manifest & Cluster & Explorer
-    CLI --> Manifest
+    App & CLI --> Workspace
+    Workspace --> Manifest & Cluster & Explorer
     Manifest --> Converter["Manifest converter"]
     Cluster --> Collector["Kubernetes collector<br/>+ metrics-server, EKS API"]
     Converter --> Engine
@@ -73,8 +74,8 @@ flowchart LR
 ```
 
 - `core/` holds all cost logic and has no Kubernetes, Wails, cloud SDK or file I/O dependencies.
-- Entry points translate input and output only and never reimplement pricing.
-- The app keeps budgets, cost history and recommendation state in your user config directory.
+- Entry points translate input and output only and never reimplement pricing. The desktop app and the CLI call the same workspace workflows in `internal/application/workspace`.
+- Budgets, cost history and recommendation state live in your user config directory, shared by the app and the CLI.
 
 Design notes: [architecture](docs/architecture.md), [core contract](docs/core-contract.md), [layer contracts](docs/layer-contracts.md), [cost explorer design](docs/cost-explorer-design.md).
 
@@ -125,22 +126,50 @@ Install metrics-server on the cluster to get the usage, efficiency and rightsizi
 
 ## CLI usage
 
+Install guide, PATH setup per OS, WSL notes and troubleshooting: **[CLI.md](CLI.md)**.
+
 ```sh
 go install ./cmd/kubeestimate
 # make sure $(go env GOPATH)/bin is on your PATH
 
-kubeestimate -f deployment.yaml                                   # AWS, us-east-1, m6i.large
-kubeestimate -f deployment.yaml --provider aws   --region eu-west-1   --instance-type c6i.large
-kubeestimate -f deployment.yaml --provider gcp   --region us-central1 --instance-type e2-standard-2
-kubeestimate -f deployment.yaml --provider azure --region eastus      --instance-type Standard_D2s_v5
+kubeestimate help
 ```
 
-Any value you omit falls back to the provider's default, and the CLI prints an advisory for each assumption. Output is hourly and daily USD.
+| Command | What it does |
+|---|---|
+| `manifest -f app.yaml` | Estimates what a Deployment's requests cost at a provider's list prices. No cluster needed. |
+| `contexts` | Lists the kubeconfig contexts with a number and a short name (the EKS cluster name for ARN and eksctl contexts), and marks the current one. |
+| `cluster` | Summarizes a cluster: platform, nodes, namespaces, request coverage and warnings. `--workloads` lists every workload. |
+| `cost` | Prices a cluster: billed, requested, idle and shared cost, broken down `--by namespace`, `workload` or `nodegroup`, plus this month's forecast and budget. |
+| `simulate -f app.yaml` | Shows how deploying a manifest changes a real cluster's bill, which can rise by more than the workload's own cost (new nodes) or not at all (idle capacity): bill before and after, placement, new nodes, idle capacity, optimization plan and month forecast. |
+
+```sh
+# Manifest estimates (no cluster needed)
+kubeestimate manifest -f deployment.yaml                         # AWS, us-east-1, m6i.large
+kubeestimate manifest -f deployment.yaml --provider gcp --region us-central1 --instance-type e2-standard-2
+
+# Cluster commands use your kubeconfig's current context, like kubectl
+kubeestimate contexts
+kubeestimate cluster --context 2 --workloads        # by number from `contexts`
+kubeestimate cost --context beautiful-creature      # by short name or a unique part of the name
+kubeestimate cost --by workload --top 10
+kubeestimate cost -n payments
+kubeestimate simulate -f deployment.yaml
+
+# Any command as JSON
+kubeestimate cost -o json | jq '.report.totals.provisioned.monthly'
+```
+
+- `manifest` falls back to the provider's defaults for any value you omit and prints an advisory for each assumption. The older form `kubeestimate -f app.yaml` still works.
+- `cost` and `simulate` detect the provider and region from the nodes, and `--provider` and `--region` override them. Each node is always priced as its own machine type, so a local cluster (kind, minikube) cannot be priced.
+- Each `cost` run adds a point to the cluster's spend history, which the app's trend and forecast also read. Pass `--no-history` to skip it. `simulate` uses your budgets and dismissed recommendations but writes nothing.
+- Every command is read-only towards the cluster. Monthly figures use the same 730-hour month as the app.
+- Exit codes: `0` success, `1` the command failed (for example the cluster is unreachable), `2` invalid usage.
 
 ## Current limits
 
 - Manifest mode supports `apps/v1` Deployments, one file at a time.
-- The CLI estimates manifests only. Cluster and cost analysis are only in the desktop app.
+- The optimization plan with apply/confirm tracking, cost trends and setting budgets are only in the desktop app. The CLI shows the forecast against a budget set there.
 - Prices are bundled list-price snapshots for a set of regions. They do not cover discounts, savings plans, root disks or public IPs.
 - Any cluster can be inspected, but only nodes on AWS, GCP or Azure can be priced. Direct connection and the Provider view exist only for EKS so far.
 - Costs are calculated from requests and node rates. They are an estimate, not your cloud invoice.
@@ -161,15 +190,13 @@ Any value you omit falls back to the provider's default, and the CLI prints an a
 - [x] CSV/PDF export and EKS showcase cluster
 
 **Next**
-
-- [ ] More manifest kinds (StatefulSet, DaemonSet, Job/CronJob), multi-document YAML and folders
-- [ ] `kubectl-cost-workspace` plugin for manifest and cluster estimates (`kubectl cost-workspace estimate -f app.yaml`)
-- [ ] GitHub Action that posts cost deltas on pull requests, with thresholds
-- [ ] Kubernetes admission webhook for cost policy
-- [ ] Direct GKE and AKS connections with provider views
-- [ ] Persistent cluster history and deeper usage analysis
-- [ ] ML/LLM-assisted cost prediction (exploratory)
+- [x] CLI cluster commands: contexts, cluster summary, cost report and rollout simulation
 - [ ] Final documentation, design write-up and showcase
+
+Additions for the future:
+- [ ] More manifest kinds (StatefulSet, DaemonSet, Job/CronJob), multi-document YAML and folders
+- [ ] More manifest kinds (StatefulSet, DaemonSet, Job/CronJob), multi-document YAML and folders
+- [ ] ML/LLM-assisted cost prediction (exploratory)
 
 ## Repository layout
 
@@ -181,7 +208,8 @@ core/                   pure cost logic: engine, pricing, costmodel, allocation,
                         costseries, optimize, whatif
 internal/
   adapters/             Wails bindings and Kubernetes collector
-  application/          manifest, cluster and cost-explorer use cases
+  application/          manifest, cluster and cost-explorer use cases, and the
+                        workspace workflows shared by the app and the CLI
   converter/            manifest → workload
   providers/            AWS, GCP, Azure catalogs and EKS integration
   storage/              local budget, cost-history and recommendation stores

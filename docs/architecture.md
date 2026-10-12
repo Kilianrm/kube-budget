@@ -101,6 +101,8 @@ Entry points adapt a particular environment to the application services. They ma
 
 The CLI provides direct access to Manifest Mode and Cluster Mode. It owns command selection, flags, file access, terminal output, and process exit codes.
 
+The workflows the CLI and the desktop adapter share (connecting through a kubeconfig, collecting a snapshot, pricing it, recording its history, forecasting the month and simulating a manifest) live in `internal/application/workspace`. Each entry point maps its own requests onto those calls and formats the results; neither keeps a copy of the workflow.
+
 #### kubectl plugin
 
 The plugin provides Kubernetes-oriented commands using the user's current kubeconfig and context. It may expose manifest estimation, cluster inspection, and planned-versus-live comparison while delegating those workflows to the application services.
