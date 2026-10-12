@@ -1,124 +1,84 @@
+// Command kubeestimate brings the workspace to the terminal: manifest
+// estimates, a read-only view of a cluster, its cost report and what
+// deploying a manifest would do to its bill.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
-
-	manifestmode "kube-cost-workspace/internal/application/manifest"
-	"kube-cost-workspace/internal/providers"
 )
 
+// Exit codes: 0 on success, 1 when the work failed, 2 for a usage error.
 const (
-	defaultProvider = "aws"
+	exitOK    = 0
+	exitError = 1
+	exitUsage = 2
 )
+
+type command struct {
+	name    string
+	summary string
+	run     func(args []string, stdout, stderr io.Writer) int
+}
+
+var commands = []command{
+	{name: "manifest", summary: "what a Deployment's requests cost at a provider's list prices (no cluster needed)", run: runManifest},
+	{name: "contexts", summary: "list the kubeconfig contexts", run: runContexts},
+	{name: "cluster", summary: "summarize a cluster: nodes, namespaces, workloads and warnings", run: runCluster},
+	{name: "cost", summary: "price a cluster: billed, requested, idle and shared, by namespace, workload or node group", run: runCost},
+	{name: "simulate", summary: "how deploying a manifest changes a real cluster's bill: placement, new nodes, idle, budget and plan", run: runSimulate},
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if hasManifestFileFlag(args) {
-		return runManifest(args, stdout, stderr)
+	if len(args) == 0 {
+		printUsage(stderr)
+		return exitUsage
 	}
 
+	name := args[0]
+	switch {
+	case name == "help" || name == "-h" || name == "--help":
+		printUsage(stdout)
+		return exitOK
+	case strings.HasPrefix(name, "-"):
+		// kubeestimate -f app.yaml, the form before subcommands existed.
+		if hasManifestFileFlag(args) {
+			return runManifest(args, stdout, stderr)
+		}
+		printUsage(stderr)
+		return exitUsage
+	}
+
+	for _, command := range commands {
+		if command.name == name {
+			return command.run(args[1:], stdout, stderr)
+		}
+	}
+	fmt.Fprintf(stderr, "unknown command %q\n\n", name)
 	printUsage(stderr)
-	return 2
+	return exitUsage
 }
 
-func printUsage(stderr io.Writer) {
-	fmt.Fprintln(stderr, "Usage: kubeestimate -f <manifest.yaml> [options]")
-	fmt.Fprintln(stderr, "  -f, --file  select Manifest Mode and estimate the provided manifest")
-}
-
-func runManifest(args []string, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("kubeestimate", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	var manifestPath string
-	flags.StringVar(&manifestPath, "f", "", "Kubernetes manifest file")
-	flags.StringVar(&manifestPath, "file", "", "Kubernetes manifest file")
-	provider := flags.String("provider", defaultProvider, "registered cloud provider")
-	region := flags.String("region", "", "cloud region (for example: eu-west-1 or us-central1)")
-	instanceType := flags.String("instance-type", "", "worker node machine type")
-	flags.Usage = func() {
-		fmt.Fprintf(stderr, "Usage: kubeestimate -f <manifest.yaml> --provider <%s> --region <region> [--instance-type <type>]\n", strings.Join(providers.Names(), "|"))
-		flags.PrintDefaults()
+func printUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: kubeestimate <command> [options]")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Commands:")
+	for _, command := range commands {
+		fmt.Fprintf(w, "  %-9s %s\n", command.name, command.summary)
 	}
-
-	if err := flags.Parse(args); err != nil {
-		return 2
-	}
-	if manifestPath == "" || flags.NArg() != 0 {
-		flags.Usage()
-		return 2
-	}
-	providerName := strings.ToLower(strings.TrimSpace(*provider))
-	selectedProvider, ok := providers.Get(providerName)
-	if !ok {
-		fmt.Fprintf(stderr, "unsupported provider %q; supported providers: %s\n", *provider, strings.Join(providers.Names(), ", "))
-		return 2
-	}
-	defaultRegion, defaultInstanceType := selectedProvider.DefaultRegion(), selectedProvider.DefaultMachineType()
-	if *region == "" {
-		*region = defaultRegion
-	}
-	if *instanceType == "" {
-		*instanceType = defaultInstanceType
-	}
-	if !hasFlag(args, "provider") {
-		fmt.Fprintf(stderr, "advice: --provider was not specified; assuming %s\n", defaultProvider)
-	}
-	if !hasFlag(args, "region") {
-		fmt.Fprintf(stderr, "advice: --region was not specified; assuming %s\n", defaultRegion)
-	}
-	if !hasFlag(args, "instance-type") {
-		fmt.Fprintf(stderr, "advice: --instance-type was not specified; assuming %s\n", defaultInstanceType)
-	}
-
-	regionValue := selectedProvider.NormalizeRegion(*region)
-	config, err := selectedProvider.NewPriceConfig(*instanceType, regionValue)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	manifestInput, err := os.ReadFile(manifestPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "read manifest: %v\n", err)
-		return 1
-	}
-	result, err := manifestmode.New(config).Estimate(manifestInput)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-
-	workload := result.Workload
-	estimate := result.Estimate
-	fmt.Fprintf(stdout, "Workload: %s\n", workload.Name)
-	if workload.Namespace != "" {
-		fmt.Fprintf(stdout, "Namespace: %s\n", workload.Namespace)
-	}
-	fmt.Fprintf(stdout, "Provider: %s (%s)\n", providerName, regionValue)
-	fmt.Fprintf(stdout, "Instance type: %s\n", *instanceType)
-	fmt.Fprintf(stdout, "Replicas: %d\n", workload.Replicas)
-	fmt.Fprintf(stdout, "Hourly total: %.4f %s\n", estimate.Total, estimate.Currency)
-
-	names := make([]string, 0, len(estimate.PerResource))
-	for name := range estimate.PerResource {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		fmt.Fprintf(stdout, "  %s: %.4f %s/hour\n", name, estimate.PerResource[name], estimate.Currency)
-	}
-
-	fmt.Fprintf(stdout, "Daily total: %.4f %s\n", estimate.Total*24, estimate.Currency)
-	fmt.Fprintf(stdout, "Monthly total: %.4f %s\n", estimate.Total*24*30, estimate.Currency)
-
-	return 0
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Examples:")
+	fmt.Fprintln(w, "  kubeestimate manifest -f <manifest.yaml> --provider aws --region eu-west-1")
+	fmt.Fprintln(w, "  kubeestimate cost --context prod --by workload")
+	fmt.Fprintln(w, "  kubeestimate simulate -f <manifest.yaml> --context prod")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Run 'kubeestimate <command> -h' for a command's options. Every command accepts -o json.")
 }
 
 func hasFlag(args []string, name string) bool {
