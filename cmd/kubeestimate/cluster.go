@@ -34,15 +34,16 @@ func runContexts(args []string, stdout, stderr io.Writer) int {
 	}
 
 	table := newTable(stdout)
-	fmt.Fprintln(table, "CURRENT\tNAME\tCLUSTER\tSERVER")
+	fmt.Fprintln(table, "#\tCURRENT\tSHORT NAME\tCONTEXT\tSERVER")
 	for _, context := range contexts {
 		current := ""
 		if context.Current {
 			current = "*"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", current, context.Name, context.Cluster, context.Server)
+		fmt.Fprintf(table, "%d\t%s\t%s\t%s\t%s\n", context.Number, current, context.Short, context.Name, context.Server)
 	}
 	table.Flush()
+	fmt.Fprintln(stdout, "\nPass --context with the number, the short name, the full name or a unique part of it.")
 	return exitOK
 }
 

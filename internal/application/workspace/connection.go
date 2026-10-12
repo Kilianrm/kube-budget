@@ -44,7 +44,12 @@ type Connection struct {
 
 // KubeconfigContext is one context of a kubeconfig.
 type KubeconfigContext struct {
-	Name    string `json:"name"`
+	// Number is the context's 1-based position in the sorted list, a quick
+	// way to name it; it moves when contexts are added or removed.
+	Number int    `json:"number"`
+	Name   string `json:"name"`
+	// Short is a readable name, such as the EKS cluster behind an ARN.
+	Short   string `json:"short"`
 	Server  string `json:"server"`
 	Cluster string `json:"cluster"`
 	Current bool   `json:"current"`
@@ -71,9 +76,12 @@ func Contexts(kubeconfigPath string) ([]KubeconfigContext, error) {
 		if !ok {
 			continue
 		}
-		contexts = append(contexts, KubeconfigContext{Name: name, Server: redactServerURL(cluster.Server), Cluster: context.Cluster, Current: name == config.CurrentContext})
+		contexts = append(contexts, KubeconfigContext{Name: name, Short: shortContextName(name), Server: redactServerURL(cluster.Server), Cluster: context.Cluster, Current: name == config.CurrentContext})
 	}
 	sort.Slice(contexts, func(i, j int) bool { return contexts[i].Name < contexts[j].Name })
+	for index := range contexts {
+		contexts[index].Number = index + 1
+	}
 	return contexts, nil
 }
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"strings"
 
 	"kube-cost-workspace/internal/application/workspace"
 )
@@ -17,7 +16,7 @@ type connectionFlags struct {
 
 func (connection *connectionFlags) register(flags *flag.FlagSet, namespaced bool) {
 	flags.StringVar(&connection.kubeconfig, "kubeconfig", "", "path to the kubeconfig file (default: KUBECONFIG or ~/.kube/config)")
-	flags.StringVar(&connection.context, "context", "", "kubeconfig context to use (default: the current context)")
+	flags.StringVar(&connection.context, "context", "", "context to use: its name, number or short name from 'kubeestimate contexts', or a unique part of the name (default: the current context)")
 	if !namespaced {
 		return
 	}
@@ -25,14 +24,12 @@ func (connection *connectionFlags) register(flags *flag.FlagSet, namespaced bool
 	flags.StringVar(&connection.namespace, "namespace", "", "limit to one namespace (default: all namespaces)")
 }
 
+// resolve accepts a context's full name, its number or short name from
+// 'kubeestimate contexts', or a unique piece of its name.
 func (connection connectionFlags) resolve() (workspace.Connection, error) {
-	contextName := strings.TrimSpace(connection.context)
-	if contextName == "" {
-		current, err := workspace.CurrentContext(connection.kubeconfig)
-		if err != nil {
-			return workspace.Connection{}, err
-		}
-		contextName = current
+	contextName, err := workspace.ResolveContext(connection.kubeconfig, connection.context)
+	if err != nil {
+		return workspace.Connection{}, err
 	}
 	return workspace.Connection{
 		KubeconfigPath: connection.kubeconfig,

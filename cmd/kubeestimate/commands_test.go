@@ -120,7 +120,7 @@ func TestContextsMarksTheCurrentOne(t *testing.T) {
 	if code := run([]string{"contexts", "--kubeconfig", writeKubeconfig(t)}, &stdout, &stderr); code != exitOK {
 		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "*        staging") || !strings.Contains(stdout.String(), "https://staging.example.com") {
+	if !strings.Contains(stdout.String(), "1  *        staging") || !strings.Contains(stdout.String(), "https://staging.example.com") {
 		t.Errorf("contexts = %q, want staging marked current", stdout.String())
 	}
 }
