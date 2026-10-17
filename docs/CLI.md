@@ -3,35 +3,12 @@
 `kubeestimate` is an optional supporting tool for [Kube Cost Workspace](README.md).
 It estimates manifests, summarizes clusters, prices them, and simulates a rollout
 using the same services and cost model as the desktop application. This guide
-covers installation, [commands](#usage), [examples](#examples), and troubleshooting.
+covers installing the CLI, [commands](#usage), [examples](#examples), and
+troubleshooting.
 
-## Requirements
+## Install
 
-| You need | For |
-|---|---|
-| [Go 1.25 or later](https://go.dev/dl/) and Git | Building and installing the CLI |
-| A kubeconfig with access to a cluster | `contexts`, `cluster`, `cost` and `simulate` |
-| [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) with an active session | EKS clusters, whose kubeconfig contexts authenticate through `aws eks get-token` |
-| metrics-server on the cluster (optional) | Usage figures in the cost report |
-
-`manifest` needs only Go. It runs without a cluster or cloud account.
-
-Check your Go version with:
-
-```sh
-go version
-```
-
-## 1. Get the code
-
-```sh
-git clone https://github.com/Kilianrm/kube-budget.git
-cd kube-budget
-```
-
-## 2. Install
-
-From the repository root:
+From the root of a local repository:
 
 ```sh
 go install ./cmd/kubeestimate
@@ -46,9 +23,9 @@ This builds the CLI and places the binary in Go's bin directory:
 
 To see where it went on your machine, run `go env GOPATH`. The binary is in the `bin` folder inside that path.
 
-> Install from a clone as shown above. `go install github.com/...@latest` does not work for this repository.
+Build it from this repository's local checkout; `go install github.com/...@latest` is not supported.
 
-## 3. Add Go's bin directory to your PATH
+## Add Go's bin directory to your PATH
 
 Skip this step if `kubeestimate help` already works in a new terminal.
 
@@ -86,7 +63,7 @@ go install ./cmd/kubeestimate
 
 A binary built in WSL works only in WSL. A Windows build reads the Windows kubeconfig (`%USERPROFILE%\.kube\config`), not the one in WSL.
 
-## 4. Check the installation
+## Verify the installation
 
 ```sh
 kubeestimate help
@@ -211,7 +188,7 @@ Delete that folder too if you also want to remove this data. The desktop app los
 
 | Problem | Fix |
 |---|---|
-| `kubeestimate: command not found` or `is not recognized` | Go's bin directory is not on your PATH. Follow [step 3](#3-add-gos-bin-directory-to-your-path) and open a new terminal. |
+| `kubeestimate: command not found` or `is not recognized` | Go's bin directory is not on your PATH. Follow [Add Go's bin directory to your PATH](#add-gos-bin-directory-to-your-path) and open a new terminal. |
 | `go: command not found` | Go is not installed, or not in this environment. On Windows, check whether Go is installed in WSL or in Windows. |
 | `the kubeconfig has no current context` | Pass `--context`. It takes the number, short name or full name shown by `kubeestimate contexts`, or a unique part of the name. |
 | `context "<name>" was not found` | Nothing in your kubeconfig matches. Check `kubeestimate contexts`, or pass `--kubeconfig <path>` if the context is in another file. |

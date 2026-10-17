@@ -57,10 +57,6 @@ flowchart LR
     Pricing --> Engine & Model
 ```
 
-For the system design and component boundaries, see the
-[architecture overview](docs/architecture.md) and
-[layer contracts](docs/layer-contracts.md).
-
 ## Features
 
 - Deployment manifest estimates per hour, day, and month, with CPU, memory,

@@ -12,9 +12,10 @@ updates and show current versus proposed replicas, requests, and costs.
 
 The optimization view presents a waterfall from today's bill to the optimized
 bill, with each step claiming only its incremental savings. Review each risk
-note and its `kubectl`, `aws`, or `eksctl` commands, run changes yourself, then
-track them through apply and confirm. Dismissing a recommendation recalculates
-the plan.
+note and its `kubectl`, `aws`, or `eksctl` commands; the app never runs them.
+Start applying a recommendation to track your change. Its proposed details
+stay fixed while it is in progress, and later cluster reports determine when
+the change is complete. Dismissing a recommendation recalculates the plan.
 
 ## Demo Clusters
 

@@ -1,19 +1,19 @@
 # Kube Cost Workspace Documentation
 
-This index is the entry point to the project's architecture, cost model,
-design documentation, and supporting guides. Architecture and design documents
-live in this directory; implementation and tool guides remain alongside their
-respective components.
+This directory documents the architecture and implemented behavior of the
+project. Start with the architecture overview, then use the contracts and cost
+model guide when working on a specific boundary.
 
 ## Reading Order
 
-1. [Architecture overview](architecture.md): understand the system's components
-   and responsibilities.
-2. [Layer contracts](layer-contracts.md): follow the boundaries between entry
-   points, application workflows, adapters, and the core.
-3. [Core contract](core-contract.md): review the contracts for the cost logic.
-4. [Cost explorer design](cost-explorer-design.md): explore the design of the
-   cost analysis workspace.
+1. [Architecture overview](architecture.md): implemented entry points, layers,
+   workflows, and scope boundaries.
+2. [Layer contracts](layer-contracts.md): current data flow and ownership
+   between converters, application services, adapters, and core packages.
+3. [Core contract](core-contract.md): the single-workload estimator's input,
+   pricing, and output.
+4. [Cost model and explorer](cost-explorer-design.md): cluster reports,
+   pricing assumptions, history, forecasts, optimization, and simulation.
 
 ## Supporting Guides
 
@@ -22,7 +22,7 @@ respective components.
 | [Project README](../README.md) | Desktop setup, usage, features, and project scope |
 | [Workspace guide](workspace-guide.md) | Reviewing suggested changes, demo clusters, local data, and cluster access |
 | [Core guide](../core/README.md) | Pure Go cost core documentation |
-| [CLI guide](../CLI.md) | Optional supporting CLI: installation, commands, examples, and troubleshooting |
+| [CLI guide](CLI.md) | Optional supporting CLI: installation, commands, examples, and troubleshooting |
 | [Sample manifests](../data/manifests/README.md) | Example inputs for manifest estimation |
 | [Local cluster commands](../k8s-local-cluster-tool/commands.md) | Local kind cluster tooling commands |
 | [EKS cluster commands](../k8s-eks-cluster-tool/commands.md) | EKS cluster tooling commands |
