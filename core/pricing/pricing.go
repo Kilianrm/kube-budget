@@ -6,13 +6,15 @@ type Resource struct {
 	CPU       float64
 	MemoryGB  float64
 	StorageGB float64
+	GPU       float64
 }
 
 // PriceConfig contains the pricing assumptions used by the estimator.
 type PriceConfig struct {
-	CPUUSDPerCore      float64
-	MemoryUSDPerGB     float64
-	StorageUSDPerGB    float64
+	CPUUSDPerCore   float64
+	MemoryUSDPerGB  float64
+	StorageUSDPerGB float64
+	GPUUSDPerUnit   float64
 }
 
 // EstimateCost calculates the cost of a set of resources based on a simple pricing model.
@@ -22,6 +24,7 @@ func EstimateCost(resources []Resource, cfg PriceConfig) float64 {
 		total += resource.CPU * cfg.CPUUSDPerCore
 		total += resource.MemoryGB * cfg.MemoryUSDPerGB
 		total += resource.StorageGB * cfg.StorageUSDPerGB
+		total += resource.GPU * cfg.GPUUSDPerUnit
 	}
 	return total
 }

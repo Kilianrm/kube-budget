@@ -1,80 +1,101 @@
 # Layer Contracts
 
-This document defines how data moves between the parts of KubeBudget. It is different from [core-contract.md](core-contract.md), which defines the input and output of the core engine itself.
+This document describes the data boundaries implemented by the application.
+The workload estimator's normalized input and output are defined in
+[Core contract](core-contract.md).
 
-## Data flow
-
-```text
-Raw manifest -> Input delivery -> Kubernetes converter -> Normalized Workload -> Core engine -> Estimate
-```
-
-## 1. Input delivery contract
-
-The input delivery layer receives raw manifest content from a file, HTTP request, or CI system.
-
-Input:
+## Workflow map
 
 ```text
-bytes containing YAML or JSON
+Manifest bytes -> converter -> engine.Workload -> core.Engine -> engine.Estimate
+
+Kubernetes API -> collector -> cluster.Snapshot -> cost explorer -> CostReport
+                                                         |             |
+                                                         |             +-> optimization plan
+                                                         +-> allocation core
+                                                              -> history / forecast
 ```
 
-Responsibilities:
+The desktop and CLI adapt user input and output around these workflows. They do
+not own separate pricing or cost-allocation rules.
 
-- receive or read the content
-- pass the content to the Kubernetes converter
-- report file or transport errors
+## Manifest input
 
-It does not interpret Kubernetes fields or calculate costs.
+`internal/converter.ConvertDeployment` accepts YAML or JSON bytes for one
+`apps/v1` Deployment and returns an `engine.Workload`.
 
-## 2. Kubernetes converter contract
+The converter:
 
-The converter understands Kubernetes manifest structure.
+- checks the API version, kind, name, and presence of containers
+- converts each regular container's CPU, memory, ephemeral-storage, and
+  `nvidia.com/gpu` requests when present
+- includes native sidecars declared as init containers with
+  `restartPolicy: Always`
+- requires each container to declare at least a CPU or memory request
+- returns parsing, unsupported-kind, and incomplete-request errors
 
-Input:
+Autoscaler bounds are supported by the separate
+`ConvertDeploymentWithAutoscaler` helper, which takes the Deployment and HPA
+documents separately. The basic converter does not discover or resolve
+associated documents. The converter contains no pricing rules.
 
-```go
-[]byte // raw YAML or JSON manifest
-```
+## Workload estimation
 
-Output:
+The converter's `engine.Workload` is priced by `core/engine`. Each entry in
+`Resources` represents a container's normalized requests. Rates come from a
+`pricing.PriceConfig`; totals are hourly USD, multiplied by replicas. Optional
+minimum and maximum replica bounds produce additional totals. See
+[Core contract](core-contract.md) for the calculation and units.
 
-```go
-core.Workload
-```
+The engine is a calculation primitive, not a Kubernetes validator: conversion
+errors are returned by the converter, while `Engine.Estimate` returns an
+estimate directly.
 
-Responsibilities:
+## Cluster collection and cost reporting
 
-- parse the manifest
-- support the Kubernetes kinds defined by the MVP
-- extract replicas and resource requests
-- convert quantities such as `500m` and `512Mi`
-- validate required values
-- return errors for malformed or unsupported input
+The cluster application returns a `cluster.Snapshot` (schema version 4). It
+retains Kubernetes-specific identity and context, including nodes, workloads,
+pods and their placements, resources, provider metadata, and collection
+warnings. Optional metrics-server samples are attached as observed pod usage;
+they do not replace resource requests.
 
-The converter must not contain pricing rules.
+`internal/application/costexplorer` projects the snapshot into the neutral
+`core/allocation.Cluster` input. The allocator resolves rates through
+`pricing.RateResolver` and produces a `costmodel.CostReport`. Unknown rates and
+partial collection are represented as warnings or unpriced line items rather
+than silently assigned a price.
 
-Example interface:
+The report keeps requested and provisioned bases separate. It also carries
+reconciled idle and shared costs, assumptions, warnings, optional usage
+summaries, and dimension breakdowns. See
+[Cost model and explorer](cost-explorer-design.md) for the pricing rules and
+their assumptions.
 
-```go
-type Converter interface {
-    Convert(input []byte) (core.Workload, error)
-}
-```
+## Pricing provider boundary
 
-## 3. Core engine contract
+`pricing.RateResolver` exposes three operations:
 
-The core receives the normalized `core.Workload` produced by the converter and returns an `Estimate`. The complete data definition is documented in [core-contract.md](core-contract.md).
+- `ResolveNode` for a machine's billed hourly price
+- `ResolveResources` for per-unit CPU, memory, storage, and GPU rates
+- `ResolveFlat` for non-resource fees such as a managed control plane
 
-The core does not know whether the data came from a CLI, GitHub, a webhook, or a direct function call.
+Provider catalogs implement this contract. Callers select a provider and
+region through application options; the core does not perform provider
+detection or network calls.
 
-## 4. Error ownership
+## Persistence and errors
 
-- Input delivery owns file, transport, and request-body errors.
-- The converter owns malformed or unsupported manifest errors.
-- The core owns invalid normalized models and calculation errors.
+Local stores own budgets, captured cost history, and recommendation state. The
+application workflows combine those stores with core operations; calculation
+packages do not read or write files.
 
-Each layer returns errors to its caller instead of silently inventing missing values.
-
-## MVP decision
-
-For the first implementation, input delivery and the Kubernetes converter may live in the same package. They are still separate logical responsibilities, but separate abstractions are unnecessary until another input source is added.
+- Entry-point adapters report flag, file-selection, binding, and presentation
+  errors.
+- The converter reports malformed, unsupported, or incomplete Deployment
+  input.
+- Cluster collection returns connection and API errors, and may also return a
+  snapshot with warnings for incomplete data.
+- Pricing resolution failures remain visible in the report; unpriced items do
+  not contribute to cost totals.
+- Core planning and estimation operate on normalized values and do not access
+  Kubernetes or local storage.

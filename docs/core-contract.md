@@ -1,76 +1,100 @@
-# Core Engine Contract
+# Core Contracts
 
-This document defines the contract of the cost-estimation core. It describes the data the core accepts and the result it returns.
+The `core/` directory contains several calculation packages. This page maps
+their responsibilities and defines the detailed contract for the single-
+workload estimator. Cluster reporting, history, optimization, and rollout
+simulation are described in [Cost model and explorer](cost-explorer-design.md);
+the provider pricing boundary is described in [Layer contracts](layer-contracts.md).
 
-The core does not receive raw Kubernetes YAML. A converter prepares this normalized input before calling the engine.
+| Package | Responsibility | Contract details |
+|---|---|---|
+| `engine` | Estimate a normalized workload from resource requests and rates | This page |
+| `pricing` | Define estimator rates and provider rate-card contracts | This page and [Layer contracts](layer-contracts.md) |
+| `allocation` | Price normalized cluster infrastructure and workload requests | [Cost model and explorer](cost-explorer-design.md) |
+| `costmodel` | Represent, project, group, and reconcile cost reports | [Cost model and explorer](cost-explorer-design.md) |
+| `costseries` | Integrate captured rates into history and build forecasts | [Cost model and explorer](cost-explorer-design.md) |
+| `optimize` | Build an ordered plan with incremental, non-overlapping savings | [Cost model and explorer](cost-explorer-design.md) |
+| `whatif` | Simulate workload placement and its impact on report costs | [Cost model and explorer](cost-explorer-design.md) |
 
-## Core input
+The sections below specify only the `engine` and single-workload `pricing`
+contract; they are not a complete field-by-field API reference for every core
+package.
+
+## Input
+
+`core/engine.Workload` contains the workload identity, replica count, a list of
+resource requests, and optional autoscaler bounds. Each `core/pricing.Resource`
+represents one container:
 
 ```go
 type Workload struct {
-    Name      string
-    Namespace string
-    Replicas  int32
-    Resources []Resource
+    Name        string
+    Namespace   string
+    Replicas    int32
+    Resources   []pricing.Resource
+    MinReplicas *int32
+    MaxReplicas *int32
 }
 
 type Resource struct {
     Name      string
-    CPU       float64
-    MemoryGB  float64
-    StorageGB float64
+    CPU       float64 // cores
+    MemoryGB  float64 // GiB, despite the field name
+    StorageGB float64 // GiB
+    GPU       float64 // device units
 }
 ```
 
-The normalized model contains:
+The converter supplies this model for supported Deployment manifests. The
+engine itself does not parse Kubernetes objects or validate the source
+manifest.
 
-- workload name and namespace
-- replica count
-- CPU requests expressed in cores
-- memory requests expressed in GB
-- storage requests expressed in GB
-- a name for each resource entry
+## Pricing and output
 
-The core does not know whether the model came from Kubernetes, a file, a webhook, or another source.
+`pricing.PriceConfig` supplies hourly USD rates per CPU core, memory GB, storage
+GB, and GPU unit. The engine returns an `engine.Estimate`:
 
-## Core output
 
 ```go
 type Estimate struct {
     Total       float64
     PerResource map[string]float64
     Currency    string
+    MinTotal    *float64
+    MaxTotal    *float64
 }
 ```
 
-Output semantics:
+`Total` and `PerResource` are hourly USD at `Replicas`. `PerResource` is keyed
+by `Resource.Name`; names should be unique. If names repeat, the map retains
+only the last entry for that name, while `Total` still includes every entry.
+`MinTotal` and `MaxTotal` are set together when both autoscaler bounds are
+present; if either bound is nil, both outputs are nil. The bounds are used as
+provided, without checking that they are nonnegative or ordered. The currency
+is USD.
 
-- `Total`: total estimated cost for the workload
-- `PerResource`: cost contribution for each resource entry
-- `Currency`: the currency used by the pricing configuration
-
-## Calculation
-
-The MVP applies the configured rates to every resource and then multiplies the result by the workload replica count:
+For each resource, the per-replica hourly cost is:
 
 ```text
-resource cost = (CPU * CPU rate) + (Memory * memory rate) + (Storage * storage rate)
-total cost = resource cost * replicas
+CPU * CPU rate
++ MemoryGB * memory rate
++ StorageGB * storage rate
++ GPU * GPU rate
 ```
 
-## Core responsibilities
+The total is the sum of per-replica resource costs multiplied by replicas.
+Autoscaler totals use the same per-replica cost multiplied by each bound.
+Rates are assumed to be hourly USD per unit. Daily and monthly figures are
+projections made by the calling workflow, not additional engine outputs.
+Monthly projections use 730 hours.
 
-The core engine is responsible for:
+## Responsibilities
 
-- validating the normalized model
-- applying pricing configuration
-- calculating the total cost
-- returning the resource breakdown
-
-The core engine is not responsible for:
-
-- reading files or HTTP requests
-- parsing YAML or JSON
-- understanding Kubernetes API objects
-- converting Kubernetes quantities
-- formatting output for users
+The estimator applies rates and returns a total and resource breakdown. It
+does not validate workloads, resource names, replica counts, autoscaler bounds,
+or pricing values; negative values are not rejected. Callers are responsible
+for supplying meaningful normalized values. It does not read files, parse
+manifests, resolve provider catalogs, access a cluster, or format user-facing
+output. Manifest parsing and basic required-field checks belong to
+`internal/converter`, which does not perform full Kubernetes API validation;
+provider lookup belongs to the application and pricing resolver.

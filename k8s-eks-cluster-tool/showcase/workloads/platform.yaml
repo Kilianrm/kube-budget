@@ -1,0 +1,29 @@
+# Story: a per-node agent. DaemonSets scale with the node count, are left out
+# of the spot estimate, and this one is over-requested, so rightsizing lists it
+# with a kubectl command for the DaemonSet.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-agent
+  namespace: platform
+spec:
+  selector:
+    matchLabels:
+      app: node-agent
+  template:
+    metadata:
+      labels:
+        app: node-agent
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: agent
+          image: busybox:1.36
+          command: ["/bin/sh", "-c", "while true; do sleep 60; done"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 64Mi

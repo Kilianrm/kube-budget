@@ -1,90 +1,155 @@
-# KubeBudget Architecture
+# Kube Cost Workspace Architecture
 
-This document expands on the high-level architecture summarized in the [README](../README.md), detailing the responsibilities, priorities, and scope of each component.
+This document describes the architecture implemented in the repository. The
+desktop application is the primary interface; `kubeestimate` is an optional
+CLI that reuses the same application workflows and cost logic.
 
-## Responsibilities by component
+## System overview
 
-### 1. Core Engine
-The core engine is the main product.
+```mermaid
+flowchart LR
+    subgraph Entry["Entry points"]
+        Desktop["Wails desktop<br/>React + TypeScript"]
+        CLI["kubeestimate CLI"]
+    end
 
-Responsibilities:
-- accept a normalized workload model
-- estimate CPU, memory, and storage cost
-- calculate total cost and per-resource cost
-- expose a clean interface for other consumers
+    subgraph Application["Application workflows"]
+        Workspace["Shared workspace workflows"]
+        Manifest["Manifest estimation"]
+        Cluster["Cluster collection"]
+        Explorer["Cost report and simulation"]
+    end
 
-The core does not parse Kubernetes YAML. It is implemented in Go and intended to be reused by all other integrations.
+    subgraph Core["Pure Go core"]
+        Engine["Workload estimator"]
+        Allocation["Cluster allocation"]
+        Series["Cost history and forecast"]
+        Optimize["Optimization plan"]
+        WhatIf["Rollout simulation"]
+        Pricing["Pricing contracts"]
+    end
 
-### 2. Kubernetes Converter
-The converter is the boundary between Kubernetes input and the core.
+    Desktop --> Workspace
+    CLI --> Workspace
+    Workspace --> Manifest
+    Workspace --> Cluster
+    Workspace --> Explorer
+    Manifest --> Engine
+    Cluster --> Collector["Kubernetes collector"]
+    Explorer --> Allocation
+    Explorer --> Series
+    Explorer --> Optimize
+    Explorer --> WhatIf
+    Pricing --> Engine
+    Pricing --> Allocation
+    Storage["Local stores"] --> Workspace
+```
 
-Responsibilities:
-- parse a Kubernetes manifest
-- validate the supported Kubernetes fields
-- convert CPU, memory, storage, and replicas into the normalized core model
-- return clear errors for unsupported or invalid input
+The diagram shows ownership rather than every function call. Wails bindings
+adapt desktop requests and results; the CLI adapts flags and terminal output.
+Both delegate application behavior instead of maintaining separate cost
+calculations.
 
-The converter knows about Kubernetes objects; the core does not.
+## Implemented layers
 
-### 3. CLI Plugin
-The CLI is a developer-facing entry point.
+### Entry points
 
-Responsibilities:
-- read a manifest or workload definition
-- call the core engine
-- print cost summaries in a readable format
-- help developers understand the cost impact before deployment
+- **Desktop:** Wails hosts the React and TypeScript interface and exposes Go
+  adapters for manifest, cluster, cost, history, budget, and recommendation
+  workflows.
+- **CLI:** `cmd/kubeestimate` provides manifest estimates, cluster summaries,
+  cost reports, and rollout simulation. It shares the application and core
+  packages with the desktop app.
 
-This is the primary user experience for the MVP and should behave like a kcost-style tool.
+There is no implemented HTTP API, `kubectl` plugin, GitHub Action, or admission
+webhook.
 
-### 4. GitHub Action PR Check
-The GitHub Action provides CI-level validation.
+### Application workflows
 
-Responsibilities:
-- run on pull requests or workflow triggers
-- compare old and new resource cost
-- publish a cost delta summary in the PR
-- fail the check if a configured threshold is exceeded
+`internal/application/manifest` converts one supported manifest into a
+workload estimate. `internal/application/cluster` collects a live cluster into
+a versioned snapshot. `internal/application/costexplorer` projects that
+snapshot into the neutral allocation model and returns a cost report.
 
-This is valuable because it brings the cost-estimation logic into a real software delivery workflow.
+`internal/application/workspace` coordinates shared operations such as
+connection, pricing, simulation, and local data access. It also selects the
+provider and region used to price a report. The adapters own delivery details;
+the application packages own the use cases.
 
-### 5. Admission Webhook
-The admission webhook is the Kubernetes-native enforcement path.
+### Core and integrations
 
-Responsibilities:
-- intercept workload creation or update requests
-- call the core engine
-- decide whether to allow or deny a workload based on policy rules
+Packages under `core/` contain calculation and planning logic without
+Kubernetes API access, Wails bindings, or persistence:
 
-This is the most advanced integration and should be treated as a later step rather than the initial goal.
+| Package | Responsibility |
+|---------|----------------|
+| `engine`, `pricing` | Estimate one workload from resource requests and a rate configuration |
+| `costmodel`, `allocation` | Represent and aggregate provisioned and requested costs |
+| `costseries` | Integrate stored rates into history and forecast spend against budgets |
+| `optimize` | Build an ordered, combined savings plan from a cost report |
+| `whatif` | Simulate workload placement and compare the resulting report and plan |
 
-## Why this architecture works
+`internal/converter` handles supported Kubernetes manifest input.
+`internal/adapters/kubernetes` collects cluster data. Provider catalogs under
+`internal/providers` resolve AWS, Google Cloud, and Azure list prices; AWS
+integration also supplies EKS metadata when available. `internal/storage`
+keeps local budgets, cost history, and recommendation state outside the core.
 
-This design keeps the system modular:
+## Main workflows
 
-- the core engine owns the pricing logic
-- the CLI owns developer UX
-- GitHub Actions owns CI policy checks
-- the webhook owns cluster enforcement
+### Manifest estimate
 
-That separation makes the project easier to build, test, and explain in interviews.
+The manifest workflow accepts one `apps/v1` Deployment in YAML or JSON,
+converts its container requests to the estimator's normalized input, resolves
+catalog pricing, and returns hourly, daily, and monthly estimates. CPU, memory,
+ephemeral-storage, and NVIDIA GPU requests can contribute to the estimate.
+An optional HorizontalPodAutoscaler can supply a replica range where the caller
+uses the converter's autoscaler helper.
 
-## Priority order
+When a cluster is connected, the desktop can also compare a new or updated
+Deployment against the latest cluster cost report. This is a simulation; it
+does not apply the manifest or modify cluster resources.
 
-1. Core engine
-2. CLI plugin similar to kcost
-3. GitHub Action PR check
-4. Admission webhook
+### Cluster and cost report
 
-## MVP scope for this project
+The collector records cluster identity, nodes, workloads, pods, namespaces,
+resources, warnings, and available provider metadata. Metrics-server pod usage
+is optional; a missing metrics source produces a warning rather than preventing
+request-based pricing.
 
-For the next 3-4 months, the realistic project scope is:
+The cost explorer prices each node and its workloads, then reports requested
+cost separately from provisioned cost. Idle node capacity and shared costs are
+separate reconciled parts of the provisioned bill. Unsupported pricing or
+incomplete collection is surfaced through report warnings and assumptions.
 
-- compute workload cost from resource requests
-- expose it through a CLI plugin
-- provide a GitHub Action PR cost summary
-- keep Kubernetes admission enforcement as a later enhancement
+### History, budget, and optimization
 
-## Product statement
+Cost reports are captured locally while the application is used. The history
+workflow integrates rates only across covered intervals; gaps are left
+unestimated in history. The monthly forecast separates recorded spend,
+estimated elapsed gaps, and projected future spend. A per-cluster budget is
+compared against that forecast.
 
-KubeBudget is a Go-based Kubernetes cost estimation project that provides a reusable cost engine, a kcost-like CLI plugin, and platform-ready integrations for developer workflows and CI policy checks.
+The optimization plan simulates ordered changes against one cluster scenario.
+Recommendations include risk, effort, savings, and reviewable commands or
+steps where the action is known. The app tracks applying, confirmed, dismissed,
+and no-longer-detected recommendations; commands are not executed by the app.
+
+## Important boundaries
+
+- Requested cost, provisioned cost, and observed utilization answer different
+  questions. They must not be added together or presented as interchangeable.
+- Catalog estimates are not cloud invoices. Discounts, savings plans, data
+  transfer, public IPs, and some infrastructure charges are outside the current
+  model.
+- Direct provider-management integration is EKS-specific. AWS, Google Cloud,
+  and Azure catalogs can price supported nodes, but the application does not
+  provide equivalent GKE or AKS management workflows.
+- Manifest estimation is currently limited to a single Deployment file; it
+  does not process a directory, multiple files, or multi-document YAML.
+- Cluster collection uses the user's configured access. Suggested cluster
+  changes remain under the user's control.
+
+For the cost report's calculation and interpretation, see
+[Cost model and explorer](cost-explorer-design.md). For package-level data
+boundaries, see [Layer contracts](layer-contracts.md).

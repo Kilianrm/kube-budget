@@ -1,0 +1,72 @@
+# Kube Cost Workspace showcase cluster.
+#
+# Every choice here exists to give a Kube Cost Workspace view something to show:
+#   - two node groups with different machine types and purchase options, so the
+#     explorer splits billed cost by node group and the plan sees on-demand and
+#     spot capacity side by side;
+#   - machine types from the Kube Cost Workspace price catalog (us-east-1), so every node
+#     is priced;
+#   - memory-rich m6i nodes under CPU-heavy requests, so the node-type step has
+#     a better fit (c6i) to propose;
+#   - several compute types for the spot group, so AWS can relaunch it when one
+#     type has no spot capacity. All cost more than c6i.large on demand, so the
+#     node-type step still proposes c6i.large.
+#
+# The two groups use different instance types on purpose: Kube Cost Workspace matches a
+# node to its group by its eks.amazonaws.com/nodegroup label, and falls back to
+# the instance type when a node has no such label.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: kube-cost-workspace-showcase
+  region: us-east-1
+  tags:
+    project: kube-cost-workspace
+    purpose: showcase
+
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
+
+iam:
+  withOIDC: true
+
+# Nodes run in public subnets, so a NAT gateway would only add ~$33/month.
+vpc:
+  nat:
+    gateway: Disable
+
+managedNodeGroups:
+  - name: general
+    instanceType: m6i.large
+    desiredCapacity: 3
+    minSize: 2
+    maxSize: 4
+    volumeSize: 20
+    volumeType: gp3
+    amiFamily: AmazonLinux2023
+    privateNetworking: false
+    labels:
+      workload-tier: general
+
+  - name: batch-spot
+    instanceTypes: ["c6i.large", "c7i.large", "c5d.large", "c7a.large"]
+    spot: true
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 2
+    volumeSize: 20
+    volumeType: gp3
+    amiFamily: AmazonLinux2023
+    privateNetworking: false
+    labels:
+      workload-tier: batch
+    taints:
+      - key: workload-tier
+        value: batch
+        effect: NoSchedule
+
+addons:
+  - name: aws-ebs-csi-driver
+    wellKnownPolicies:
+      ebsCSIController: true
