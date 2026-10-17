@@ -1,6 +1,9 @@
-# Installing the kubeestimate CLI
+# kubeestimate CLI
 
-`kubeestimate` is the command-line version of Kube Cost Workspace. It estimates manifests, summarizes clusters, prices them and simulates a rollout, using the same code as the desktop app. This guide covers installing it, checking that it works and fixing common problems. For the full list of commands, see [CLI usage](README.md#cli-usage) in the README.
+`kubeestimate` is an optional supporting tool for [Kube Cost Workspace](README.md).
+It estimates manifests, summarizes clusters, prices them, and simulates a rollout
+using the same services and cost model as the desktop application. This guide
+covers installation, [commands](#usage), [examples](#examples), and troubleshooting.
 
 ## Requirements
 
@@ -22,8 +25,8 @@ go version
 ## 1. Get the code
 
 ```sh
-git clone https://github.com/Kilianrm/kube-cost-workspace.git
-cd kube-cost-workspace
+git clone https://github.com/Kilianrm/kube-budget.git
+cd kube-budget
 ```
 
 ## 2. Install
@@ -77,7 +80,7 @@ Then open a new terminal so the change applies.
 Install and run the CLI where your kubeconfig and AWS CLI are. If you use `kubectl`, `kind` or `aws` inside WSL, install Go inside WSL and run every command there. The repository can stay on the Windows drive:
 
 ```bash
-cd /mnt/c/Users/<you>/path/to/kube-cost-workspace
+cd /mnt/c/Users/<you>/path/to/kube-budget
 go install ./cmd/kubeestimate
 ```
 
@@ -103,6 +106,76 @@ If you have a cluster, list your contexts and summarize the current one:
 kubeestimate contexts
 kubeestimate cluster
 ```
+
+## Usage
+
+| Command | Description |
+|---------|-------------|
+| `kubeestimate help` | Show commands and options |
+| `kubeestimate manifest -f app.yaml` | Estimate a Deployment using provider list prices, without a cluster |
+| `kubeestimate contexts` | List kubeconfig contexts with numbers, short names, and the current context |
+| `kubeestimate cluster` | Summarize platform, nodes, namespaces, request coverage, and warnings; add `--workloads` for workload details |
+| `kubeestimate cost` | Report billed, requested, idle, and shared costs, forecast, and budget; group `--by namespace`, `workload`, or `nodegroup` |
+| `kubeestimate simulate -f app.yaml` | Simulate placement, new nodes, cost changes, optimizations, and month forecast |
+
+Cluster commands use the current kubeconfig context unless `--context` selects
+another by number, short name, full name, or a unique part of its name. EKS ARN
+and eksctl contexts use the cluster name as their short name. Use `--kubeconfig`
+to select a different kubeconfig file.
+
+`cost` and `simulate` detect the provider and region from nodes; `--provider`
+and `--region` override them. Each node is priced as its own machine type.
+
+`manifest` uses provider defaults for omitted pricing options and prints an
+advisory for each assumption. The older `kubeestimate -f app.yaml` form still works.
+
+Every command supports JSON output with `-o json`. Exit codes are `0` for
+success, `1` for command failure, and `2` for invalid usage.
+
+## Examples
+
+Run these examples from the repository root to use the bundled sample manifests.
+
+### Estimate without a cluster
+
+```bash
+# Defaults: AWS, us-east-1, m6i.large
+kubeestimate manifest -f data/manifests/valid-deployment.yaml
+
+# Compare with a Google Cloud machine type
+kubeestimate manifest -f data/manifests/valid-deployment.yaml --provider gcp --region us-central1 --instance-type e2-standard-2
+```
+
+### Inspect a cluster and its costs
+
+```bash
+kubeestimate contexts
+kubeestimate cluster --context 2 --workloads
+kubeestimate cost --by workload --top 10
+kubeestimate cost -n payments
+```
+
+### Simulate a rollout and export structured output
+
+```bash
+kubeestimate simulate -f data/manifests/valid-deployment.yaml
+kubeestimate cost -o json | jq '.report.totals.provisioned.monthly'
+```
+
+### Behavior and limits
+
+- Every command is read-only towards the cluster.
+- Each `cost` run records a point in the spend history shared with the desktop
+	application. Pass `--no-history` to skip it.
+- `simulate` reads budgets and dismissed recommendations but writes nothing.
+- Setting budgets, viewing cost-history trends, and tracking optimization steps
+	through apply/confirm are desktop workflows. The CLI shows the forecast
+	against the budget set there.
+- Manifest estimates support one `apps/v1` Deployment file at a time.
+- Only supported AWS, Google Cloud, and Azure nodes can be priced; local cluster
+	nodes cannot. Prices are bundled list-price snapshots, not cloud invoices,
+	and exclude discounts, savings plans, root disks, and public IPs.
+- Monthly figures use the same 730-hour month as the desktop application.
 
 ## Updating
 
